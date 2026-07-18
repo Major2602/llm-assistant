@@ -1,0 +1,2 @@
+chainlit
+huggingface_hub
