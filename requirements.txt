@@ -1,2 +1,6 @@
-chainlit
+chainlit==2.11.1
 huggingface_hub
+anyio>=4.5.0
+uvicorn>=0.30.0
+starlette>=0.37.0
+httpcore==1.0.5
