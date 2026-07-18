@@ -1,3 +1,2 @@
 chainlit
 huggingface_hub
-asyncer
