@@ -1,6 +1,7 @@
 import os
 import chainlit as cl
 from huggingface_hub import InferenceClient
+import asyncio
 
 # Настройка клиента
 model_id = "Qwen/Qwen3.5-2B"
@@ -21,14 +22,22 @@ async def main(message: cl.Message):
     messages.append({"role": "user", "content": message.content})
 
     msg = cl.Message(content="")
-    
-    # Стриминг ответа от Hugging Face
-    for chunk in client.chat_completion(
-        messages=messages,
-        max_tokens=4096,
-        stream=True,
-        temperature=0.7
-    ):
+
+    # Мы используем loop.run_in_executor для синхронного итератора InferenceClient,
+    # чтобы избежать конфликтов с AnyIO event loop на Render.
+    def get_response():
+        return client.chat_completion(
+            messages=messages,
+            max_tokens=4096,
+            stream=True,
+            temperature=0.7
+        )
+
+    loop = asyncio.get_event_loop()
+    # Выполняем синхронный генератор в отдельном потоке, чтобы не блокировать loop
+    response_gen = await loop.run_in_executor(None, get_response)
+
+    for chunk in response_gen:
         token = chunk.choices[0].delta.content
         if token:
             await msg.stream_token(token)
