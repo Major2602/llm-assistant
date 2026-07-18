@@ -1,7 +1,7 @@
 import os
 import chainlit as cl
 from huggingface_hub import InferenceClient
-import asyncio
+from asyncer import asyncify
 
 # Настройка клиента
 model_id = "Qwen/Qwen3.5-2B"
@@ -12,7 +12,6 @@ SYSTEM_PROMPT = "You are a helpful asssistant based on Qwen 3.5 model."
 
 @cl.on_chat_start
 async def start():
-    # Инициализируем историю сообщений с системным промптом
     cl.user_session.set("messages", [{"role": "system", "content": SYSTEM_PROMPT}])
     await cl.Message(content="Hello! I am AI bot based on Qwen 3.5 model. How can I help you today?").send()
 
@@ -23,9 +22,8 @@ async def main(message: cl.Message):
 
     msg = cl.Message(content="")
 
-    # Мы используем loop.run_in_executor для синхронного итератора InferenceClient,
-    # чтобы избежать конфликтов с AnyIO event loop на Render.
-    def get_response():
+    # Оборачиваем синхронный вызов клиента через asyncify для безопасного выполнения в async среде
+    def sync_chat():
         return client.chat_completion(
             messages=messages,
             max_tokens=4096,
@@ -33,9 +31,8 @@ async def main(message: cl.Message):
             temperature=0.7
         )
 
-    loop = asyncio.get_event_loop()
-    # Выполняем синхронный генератор в отдельном потоке, чтобы не блокировать loop
-    response_gen = await loop.run_in_executor(None, get_response)
+    # asyncify гарантирует правильное выполнение в потоке без потери loop
+    response_gen = await asyncify(sync_chat)()
 
     for chunk in response_gen:
         token = chunk.choices[0].delta.content
