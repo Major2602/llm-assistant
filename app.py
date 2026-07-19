@@ -23,12 +23,14 @@ async def main(message: cl.Message):
     msg = cl.Message(content="")
     
     # Стриминг ответа от Hugging Face
-    async for chunk in client.chat_completion(
+    stream = await client.chat_completion(
         messages=messages,
         max_tokens=4096,
         stream=True,
         temperature=0.7
-    ):
+    )
+
+    async for chunk in stream:
         token = chunk.choices[0].delta.content
         if token:
             await msg.stream_token(token)
