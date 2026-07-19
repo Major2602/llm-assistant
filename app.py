@@ -1,9 +1,8 @@
 import os
-import anyio
 import chainlit as cl
 from huggingface_hub import AsyncInferenceClient
 
-# Настройка клиента: используем AsyncInferenceClient для неблокирующих запросов
+# Настройка клиента
 model_id = "Qwen/Qwen3.5-2B"
 token = os.getenv("HF_TOKEN")
 client = AsyncInferenceClient(model=model_id, token=token)
@@ -22,26 +21,18 @@ async def main(message: cl.Message):
     messages.append({"role": "user", "content": message.content})
 
     msg = cl.Message(content="")
-
-    # Асинхронный стриминг ответа от Hugging Face
-    try:
-        async for chunk in await client.chat_completion(
-            messages=messages,
-            max_tokens=4096,
-            stream=True,
-            temperature=0.7
-        ):
-            token = chunk.choices[0].delta.content
-            if token:
-                await msg.stream_token(token)
-    except Exception as e:
-        await cl.Message(content=f"Error: {e}").send()
-        return
+    
+    # Стриминг ответа от Hugging Face
+    async for chunk in client.chat_completion(
+        messages=messages,
+        max_tokens=4096,
+        stream=True,
+        temperature=0.7
+    ):
+        token = chunk.choices[0].delta.content
+        if token:
+            await msg.stream_token(token)
 
     messages.append({"role": "assistant", "content": msg.content})
     cl.user_session.set("messages", messages)
     await msg.send()
-
-if __name__ == "__main__":
-    # Запуск через anyio с бэкендом asyncio
-    anyio.run(main, backend="asyncio")
