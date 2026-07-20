@@ -31,9 +31,10 @@ async def main(message: cl.Message):
     )
 
     async for chunk in stream:
-        token = chunk.choices[0].delta.content
-        if token:
-            await msg.stream_token(token)
+        if chunk.choices and len(chunk.choices) > 0:
+            token = chunk.choices[0].delta.content
+            if token:
+                await msg.stream_token(token)
 
     messages.append({"role": "assistant", "content": msg.content})
     cl.user_session.set("messages", messages)
