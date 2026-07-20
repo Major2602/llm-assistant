@@ -1,138 +1,256 @@
 import os
-from typing import Any, List, Optional, Dict
-import chainlit as cl
-from huggingface_hub import AsyncInferenceClient
-from llama_index.core import VectorStoreIndex
-from llama_index.readers.wikipedia import WikipediaReader
-from langchain.agents import AgentExecutor, create_react_agent
-from langchain.llms.base import LLM
-from langchain_core.tools import Tool
-from langchain_core.prompts import PromptTemplate
-from chainlit.langchain.callbacks import ChainlitCallbackHandler
+from dotenv import load_dotenv
 
-# Настройка параметров
-model_id = "Qwen/Qwen3.5-2B"
-token = os.getenv("HF_TOKEN")
+load_dotenv()
 
-# Кастомный класс с поддержкой стандартных аргументов
-class HFInferenceClientLLM(LLM):
-    model_id: str
-    token: str
-    max_new_tokens: int = 512
-    temperature: float = 0.7
-    top_p: float = 0.9
-    provider: Optional[str] = None # Например, 'hf-inference'
-
-    _client: Any = None
-
-    def __init__(self, **data: Any):
-        super().__init__(**data)
-        # Инициализируем клиент. Если указан provider, можно модифицировать URL или заголовки
-        self._client = AsyncInferenceClient(model=self.model_id, token=self.token)
-
-    @property
-    def _llm_type(self) -> str:
-        return "huggingface_inference_client"
-
-    @property
-    def _identifying_params(self) -> Dict[str, Any]:
-        return {
-            "model_id": self.model_id,
-            "provider": self.provider,
-            "max_new_tokens": self.max_new_tokens
-        }
-
-    def _call(self, prompt: str, stop: Optional[List[str]] = None, **kwargs: Any) -> str:
-        import asyncio
-        async def _invoke():
-            resp = ""
-            # Объединяем дефолтные параметры с переданными в kwargs
-            gen_kwargs = {
-                "max_new_tokens": self.max_new_tokens,
-                "temperature": self.temperature,
-                "top_p": self.top_p,
-                "stop_sequences": stop
-            }
-            gen_kwargs.update(kwargs)
-
-            async for token in self._client.text_generation(prompt, stream=True, **gen_kwargs):
-                resp += token
-            return resp
-        return asyncio.run(_invoke())
-
-# 1. Настройка RAG (LlamaIndex + Wikipedia)
-def get_wikipedia_data(query: str):
-    try:
-        reader = WikipediaReader()
-        # Ищем по ключевому слову из запроса
-        documents = reader.load_data(pages=[query])
-        index = VectorStoreIndex.from_documents(documents)
-        query_engine = index.as_query_engine()
-        response = query_engine.query(f"Provide detailed information about {query}")
-        return str(response)
-    except Exception as e:
-        return f"Search error: {e}"
-
-# 2. Определение инструментов LangChain
-tools = [
-    Tool(
-        name="wikipedia_search",
-        func=get_wikipedia_data,
-        description="Useful for when you need to answer questions about specific facts, people, places, or history from Wikipedia."
-    )
-]
-
-# 3. Инициализация с новыми аргументами
-llm = HFInferenceClientLLM(
-    model_id=model_id,
-    token=token,
-    max_new_tokens=1024,
-    temperature=0.1,
-    provider="featherless-ai" #
+MODEL_NAME = os.getenv(
+    "MODEL_NAME",
+    "Qwen/Qwen3.5-2B"
 )
 
-template = """Answer the following questions as best you can. You have access to the following tools:
+HF_PROVIDER = "featherless-ai"
 
-{tools}
+WIKI_LANGUAGE = os.getenv("WIKI_LANGUAGE", "en")
 
-Use the following format:
+# ==========================================================
+# LLM
+# файл: llm.py
+# ==========================================================
 
-Question: the input question you must answer
-Thought: you should always think about what to do
-Action: the action to take, should be one of [{tool_names}]
-Action Input: the input to the action
-Observation: the result of the action
-... (this Thought/Action/Action Input/Observation can repeat N times)
-Thought: I now know the final answer
-Final Answer: the final answer to the original input question
+from huggingface_hub import AsyncInferenceClient
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import AIMessage
 
-Begin!
 
-Question: {input}
-Thought:{agent_scratchpad}"""
+class HuggingFaceQwenChat(BaseChatModel):
+    """
+    LangChain wrapper над HF AsyncInferenceClient.
 
-prompt = PromptTemplate.from_template(template)
-agent = create_react_agent(llm, tools, prompt)
-agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True, handle_parsing_errors=True)
+    Использует:
+        HuggingFace Inference Providers
+        provider = featherless-ai
+
+    Qwen3/Qwen3.5 умеют tool calling.
+    """
+
+    client: AsyncInferenceClient
+    model_name: str
+    provider: str
+
+    async def _generate(
+        self,
+        messages,
+        stop=None,
+        **kwargs
+    ):
+
+        hf_messages = []
+
+        for m in messages:
+            hf_messages.append(
+                {
+                    "role": m.type,
+                    "content": m.content
+                }
+            )
+
+        result = await self.client.chat.completions.create(
+            model=f"{self.model_name}:{self.provider}",
+            messages=hf_messages,
+            temperature=0.2,
+            max_tokens=2048,
+        )
+
+        text = (
+            result
+            .choices[0]
+            .message
+            .content
+        )
+
+        return self._create_chat_result(
+            [
+                AIMessage(
+                    content=text
+                )
+            ]
+        )
+
+    @property
+    def _llm_type(self):
+        return "qwen-featherless"
+
+client = AsyncInferenceClient()
+
+llm = HuggingFaceQwenChat(
+    client=client,
+    model_name=MODEL_NAME,
+    provider=HF_PROVIDER
+)
+
+# ==========================================================
+# RAG WIKIPEDIA
+# файл: rag/wikipedia.py
+# ==========================================================
+
+from llama_index.readers.wikipedia import WikipediaReader
+
+def load_wikipedia(topic:str):
+
+    reader = WikipediaReader(
+        language=WIKI_LANGUAGE
+    )
+
+
+    documents = reader.load_data(
+        pages=[
+            topic
+        ]
+    )
+
+    return documents
+
+# ==========================================================
+# RAG INDEX
+# файл: rag/index.py
+# ==========================================================
+
+from llama_index.core import VectorStoreIndex, Settings
+from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+
+Settings.embed_model = HuggingFaceEmbedding(
+    model_name=
+    "BAAI/bge-small-en-v1.5"
+)
+
+_indexes = {}
+
+def get_query_engine(topic:str):
+
+    if topic not in _indexes:
+        docs = load_wikipedia(
+            topic
+        )
+        index = VectorStoreIndex.from_documents(
+            docs
+        )
+        _indexes[topic] = index
+
+    return _indexes[topic].as_query_engine(
+        similarity_top_k=4
+    )
+
+# ==========================================================
+# AGENT
+# файл: agents/rag_agent.py
+# ==========================================================
+
+from langchain.tools import tool
+from langchain.agents import create_agent
+
+@tool
+async def wikipedia_rag(
+    topic:str
+)->str:
+    """
+    Search Wikipedia knowledge.
+    Use this tool when the user asks
+    about factual information.
+    """
+
+    engine = get_query_engine(
+        topic
+    )
+
+    response = await engine.aquery(
+        topic
+    )
+
+    return str(response)
+
+
+agent = create_agent(
+    model=llm,
+    tools=[
+        wikipedia_rag
+    ],
+
+    system_prompt="""
+
+You are Qwen assistant.
+You can answer normally.
+If the user needs factual knowledge
+or information about a topic,
+use wikipedia_rag tool.
+Always prefer tool results
+over your internal memory.
+Answer in the user's language.
+
+"""
+)
+
+
+async def ask_agent(
+    text:str
+):
+
+
+    result = await agent.ainvoke(
+
+        {
+            "messages":
+            [
+                {
+                    "role":"user",
+                    "content":text
+                }
+            ]
+        }
+
+    )
+
+    return (
+        result["messages"]
+        [-1]
+        .content
+    )
+
+# ==========================================================
+# CHAINLIT APP
+# файл: app.py
+# ==========================================================
+
+import chainlit as cl
 
 @cl.on_chat_start
 async def start():
-    cl.user_session.set("agent", agent_executor)
-    await cl.Message(content="""Hello! I am AI Agent based on Qwen 3.5 Model via HuggingFaceEndpoints.
-    My agentic workflow is built on LangChain. Currently I support RAG (Retrieval-Augmented Generation)
-    from Wikipedia via LlamaIndex. How can I help you today?""").send()
+
+    await cl.Message(
+
+        content=
+        """
+Привет!
+
+Я Qwen3.5 ассистент.
+
+Умею:
+- вести обычный диалог
+- искать информацию через RAG
+- использовать Wikipedia
+
+"""
+    ).send()
 
 @cl.on_message
-async def main(message: cl.Message):
-    agent = cl.user_session.get("agent")
+async def main(
+    message:cl.Message
+):
 
-    # Создаем колбэк для визуализации шагов в Chainlit
-    cb = ChainlitCallbackHandler()
-
-    # Вызываем агента с передачей колбэка
-    response = await cl.make_async(agent.invoke)(
-        {"input": message.content},
-        config={"callbacks": [cb]}
+    answer = await ask_agent(
+        message.content
     )
 
-    await cl.Message(content=response["output"]).send()
+
+    await cl.Message(
+        content=answer
+    ).send()
