@@ -3,7 +3,7 @@ import chainlit as cl
 from huggingface_hub import AsyncInferenceClient
 
 # Настройка клиента
-model_id = "Qwen/Qwen3.5-2B"
+model_id = "Qwen/Qwen3.5-2B:featherless"
 token = os.getenv("HF_TOKEN")
 client = AsyncInferenceClient(model=model_id, token=token)
 
