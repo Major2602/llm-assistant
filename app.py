@@ -3,9 +3,9 @@ import chainlit as cl
 from huggingface_hub import AsyncInferenceClient
 
 # Настройка клиента
-model_id = "Qwen/Qwen3.5-2B:featherless"
+model_id = "Qwen/Qwen3.5-2B"
 token = os.getenv("HF_TOKEN")
-client = AsyncInferenceClient(model=model_id, token=token)
+client = AsyncInferenceClient(model=model_id, token=token, provider="featherless")
 
 SYSTEM_PROMPT = "You are a helpful assistant based on Qwen 3.5 model."
 
