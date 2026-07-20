@@ -180,8 +180,9 @@ async def ask_agent(text):
 # CHAINLIT APP
 # файл: app.py
 # ==========================================================
-
+print("START")
 import chainlit as cl
+print("IMPORT SUCCESSFUL")
 
 @cl.on_chat_start
 async def start():
