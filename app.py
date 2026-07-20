@@ -66,20 +66,25 @@ def load_wikipedia(topic:str):
 # ==========================================================
 
 from llama_index.core import VectorStoreIndex, Settings
-from llama_index.embeddings.fastembed import FastEmbedEmbedding
+from fastembed import TextEmbedding
 
-embed_model = None
+embedder = None
 
-def get_embed_model():
+def get_embedder():
 
-    global embed_model
+    global embedder
 
-    if embed_model is None:
-        embed_model = FastEmbedEmbedding(
+    if embedder is None:
+        embedder = TextEmbedding(
             model_name="BAAI/bge-small-en-v1.5"
         )
 
-    return embed_model
+    return embedder
+
+def embed_texts(texts):
+    model = get_embedder()
+    vectors = list(model.embed(texts))
+    return vectors
 
 _indexes = {}
 
