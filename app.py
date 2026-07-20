@@ -183,7 +183,7 @@ def get_agent():
             tools=[
                 wikipedia_rag
             ],
-            system_prompt=system_prompt="""
+            system_prompt="""
             You are Qwen assistant.
             You can answer normally.
             If the user needs factual knowledge
@@ -192,8 +192,7 @@ def get_agent():
             Always prefer tool results
             over your internal memory.
             Answer in the user's language.
-
-"""
+            """
         )
 
     return _agent
