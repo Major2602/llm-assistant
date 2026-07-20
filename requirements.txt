@@ -1,2 +1,7 @@
 chainlit
 huggingface_hub
+langchain
+langchain-huggingface
+langchain-community
+wikipedia
+llama-index
