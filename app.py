@@ -5,10 +5,10 @@ load_dotenv()
 
 MODEL_NAME = os.getenv(
     "MODEL_NAME",
-    "prism-ml/Ternary-Bonsai-27B-gguf"
+    "Qwen/Qwen3.5-2B"
 )
 
-HF_PROVIDER = "together"
+HF_PROVIDER = "featherless-ai"
 
 # ==========================================================
 # LLM
