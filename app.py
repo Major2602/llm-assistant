@@ -202,7 +202,6 @@ over your internal memory.
 Answer in the user's language.
 
 """
-)
 
 
 async def ask_agent(text):
