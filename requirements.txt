@@ -11,6 +11,8 @@ llama-index-core>=0.14.23
 llama-index-llms-openai
 llama-index-readers-wikipedia
 llama-index-embeddings-fastembed
+
+wikipedia
 fastembed
 
 python-dotenv
