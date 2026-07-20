@@ -5,10 +5,10 @@ load_dotenv()
 
 MODEL_NAME = os.getenv(
     "MODEL_NAME",
-    "prism-ml/Ternary-Bonsai-27B-gguf"
+    "Qwen/Qwen3.5-2B"
 )
 
-HF_PROVIDER = "together"
+HF_PROVIDER = "featherless-ai"
 
 WIKI_LANGUAGE = os.getenv("WIKI_LANGUAGE", "en")
 
@@ -17,75 +17,19 @@ WIKI_LANGUAGE = os.getenv("WIKI_LANGUAGE", "en")
 # файл: llm.py
 # ==========================================================
 
-from huggingface_hub import AsyncInferenceClient
-from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage
+from langchain_openai import ChatOpenAI
 
+MODEL_NAME = os.getenv(
+    "MODEL_NAME",
+    "Qwen/Qwen3.5-2B"
+)
 
-class HuggingFaceQwenChat(BaseChatModel):
-    """
-    LangChain wrapper над HF AsyncInferenceClient.
-
-    Использует:
-        HuggingFace Inference Providers
-        provider = featherless-ai
-
-    Qwen3/Qwen3.5 умеют tool calling.
-    """
-
-    client: AsyncInferenceClient
-    model_name: str
-    provider: str
-
-    async def _generate(
-        self,
-        messages,
-        stop=None,
-        **kwargs
-    ):
-
-        hf_messages = []
-
-        for m in messages:
-            hf_messages.append(
-                {
-                    "role": m.type,
-                    "content": m.content
-                }
-            )
-
-        result = await self.client.chat.completions.create(
-            model=f"{self.model_name}:{self.provider}",
-            messages=hf_messages,
-            temperature=0.2,
-            max_tokens=2048,
-        )
-
-        text = (
-            result
-            .choices[0]
-            .message
-            .content
-        )
-
-        return self._create_chat_result(
-            [
-                AIMessage(
-                    content=text
-                )
-            ]
-        )
-
-    @property
-    def _llm_type(self):
-        return "qwen-featherless"
-
-client = AsyncInferenceClient(api_key=os.environ["HF_TOKEN"])
-
-llm = HuggingFaceQwenChat(
-    client=client,
-    model_name=MODEL_NAME,
-    provider=HF_PROVIDER
+llm = ChatOpenAI(
+    model=f"{MODEL_NAME}:{HF_PROVIDER}",
+    base_url="https://router.huggingface.co/v1",
+    api_key=os.environ["HF_TOKEN"],
+    temperature=0.2,
+    max_tokens=2048,
 )
 
 # ==========================================================
