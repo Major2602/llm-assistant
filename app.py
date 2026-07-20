@@ -24,13 +24,19 @@ MODEL_NAME = os.getenv(
     "Qwen/Qwen3.5-2B"
 )
 
-llm = ChatOpenAI(
-    model=f"{MODEL_NAME}:{HF_PROVIDER}",
-    base_url="https://router.huggingface.co/v1",
-    api_key=os.getenv("HF_TOKEN"),
-    temperature=0.2,
-    max_tokens=2048,
-)
+_llm = None
+
+def get_llm():
+    global _llm
+    if _llm is None:
+        _llm = ChatOpenAI(
+            model=f"{MODEL_NAME}:{HF_PROVIDER}",
+            base_url="https://router.huggingface.co/v1",
+            api_key=os.environ["HF_TOKEN"],
+            temperature=0.2,
+            max_tokens=2048,
+        )
+    return _llm
 
 # ==========================================================
 # RAG WIKIPEDIA
@@ -62,23 +68,35 @@ def load_wikipedia(topic:str):
 from llama_index.core import VectorStoreIndex, Settings
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 
-Settings.embed_model = HuggingFaceEmbedding(
-    model_name=
-    "BAAI/bge-small-en-v1.5"
-)
+embed_model = None
+
+def get_embed_model():
+
+    global embed_model
+
+    if embed_model is None:
+        embed_model = HuggingFaceEmbedding(
+            model_name="BAAI/bge-small-en-v1.5"
+        )
+
+    return embed_model
 
 _indexes = {}
 
 def get_query_engine(topic:str):
 
+    Settings.embed_model = get_embed_model()
+
     if topic not in _indexes:
-        docs = load_wikipedia(
-            topic
-        )
+
+        docs = load_wikipedia(topic)
+
         index = VectorStoreIndex.from_documents(
             docs
         )
+
         _indexes[topic] = index
+
 
     return _indexes[topic].as_query_engine(
         similarity_top_k=4
@@ -123,7 +141,7 @@ def get_agent():
     if _agent is None:
 
         _agent = create_agent(
-            model=llm,
+            model=get_llm,
             tools=[
                 wikipedia_rag
             ],
