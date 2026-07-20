@@ -90,7 +90,7 @@ _indexes = {}
 
 def get_query_engine(topic:str):
 
-    Settings.embed_model = get_embed_model()
+    Settings.embed_model = get_embedder()
 
     if topic not in _indexes:
 
