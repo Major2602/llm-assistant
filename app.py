@@ -5,10 +5,10 @@ load_dotenv()
 
 MODEL_NAME = os.getenv(
     "MODEL_NAME",
-    "Qwen/Qwen3.5-2B"
+    "prism-ml/Ternary-Bonsai-27B-gguf"
 )
 
-HF_PROVIDER = "featherless-ai"
+HF_PROVIDER = "together"
 
 WIKI_LANGUAGE = os.getenv("WIKI_LANGUAGE", "en")
 
