@@ -66,7 +66,7 @@ def load_wikipedia(topic:str):
 # ==========================================================
 
 from llama_index.core import VectorStoreIndex, Settings
-from llama_index.embeddings.fastembed import FastEmbedEmbedding
+from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 
 embed_model = None
 
@@ -75,7 +75,7 @@ def get_embed_model():
     global embed_model
 
     if embed_model is None:
-        embed_model = FastEmbedEmbedding(
+        embed_model = HuggingFaceEmbedding(
             model_name="BAAI/bge-small-en-v1.5"
         )
 
