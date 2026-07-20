@@ -169,51 +169,51 @@ async def wikipedia_rag(
     return str(response)
 
 
-agent = create_agent(
-    model=llm,
-    tools=[
-        wikipedia_rag
-    ],
+_agent = None
 
-    system_prompt="""
 
-You are Qwen assistant.
-You can answer normally.
-If the user needs factual knowledge
-or information about a topic,
-use wikipedia_rag tool.
-Always prefer tool results
-over your internal memory.
-Answer in the user's language.
+def get_agent():
+
+    global _agent
+
+    if _agent is None:
+
+        _agent = create_agent(
+            model=llm,
+            tools=[
+                wikipedia_rag
+            ],
+            system_prompt=system_prompt="""
+            You are Qwen assistant.
+            You can answer normally.
+            If the user needs factual knowledge
+            or information about a topic,
+            use wikipedia_rag tool.
+            Always prefer tool results
+            over your internal memory.
+            Answer in the user's language.
 
 """
-)
+        )
 
+    return _agent
 
-async def ask_agent(
-    text:str
-):
+async def ask_agent(text):
 
+    agent = get_agent()
 
     result = await agent.ainvoke(
-
         {
-            "messages":
-            [
+            "messages":[
                 {
                     "role":"user",
                     "content":text
                 }
             ]
         }
-
     )
 
-    return (
-        result["messages"]
-        [-1]
-        .content
-    )
+    return result["messages"][-1].content
 
 # ==========================================================
 # CHAINLIT APP
