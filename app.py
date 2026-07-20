@@ -10,8 +10,6 @@ MODEL_NAME = os.getenv(
 
 HF_PROVIDER = "together"
 
-WIKI_LANGUAGE = os.getenv("WIKI_LANGUAGE", "en")
-
 # ==========================================================
 # LLM
 # файл: llm.py
@@ -47,10 +45,7 @@ from llama_index.readers.wikipedia import WikipediaReader
 
 def load_wikipedia(topic:str):
 
-    reader = WikipediaReader(
-        language=WIKI_LANGUAGE
-    )
-
+    reader = WikipediaReader()
 
     documents = reader.load_data(
         pages=[
