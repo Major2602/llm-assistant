@@ -27,7 +27,7 @@ MODEL_NAME = os.getenv(
 llm = ChatOpenAI(
     model=f"{MODEL_NAME}:{HF_PROVIDER}",
     base_url="https://router.huggingface.co/v1",
-    api_key=os.environ["HF_TOKEN"],
+    api_key=os.getenv("HF_TOKEN"),
     temperature=0.2,
     max_tokens=2048,
 )
