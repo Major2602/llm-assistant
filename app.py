@@ -80,7 +80,7 @@ class HuggingFaceQwenChat(BaseChatModel):
     def _llm_type(self):
         return "qwen-featherless"
 
-client = AsyncInferenceClient()
+client = AsyncInferenceClient(api_key=os.environ["HF_TOKEN"])
 
 llm = HuggingFaceQwenChat(
     client=client,
@@ -169,26 +169,11 @@ async def wikipedia_rag(
     return str(response)
 
 
-_agent = None
-
-
-def get_agent():
-
-    global _agent
-
-    if _agent is None:
-
-        _agent = create_agent(
-            model=llm,
-            tools=[
-                wikipedia_rag
-            ],
-            system_prompt="""
-            You are Qwen assistant.
-            """
-        )
-
-    return _agent
+agent = create_agent(
+    model=llm,
+    tools=[
+        wikipedia_rag
+    ],
 
     system_prompt="""
 
@@ -202,24 +187,33 @@ over your internal memory.
 Answer in the user's language.
 
 """
+)
 
 
-async def ask_agent(text):
+async def ask_agent(
+    text:str
+):
 
-    agent = get_agent()
 
     result = await agent.ainvoke(
+
         {
-            "messages":[
+            "messages":
+            [
                 {
                     "role":"user",
                     "content":text
                 }
             ]
         }
+
     )
 
-    return result["messages"][-1].content
+    return (
+        result["messages"]
+        [-1]
+        .content
+    )
 
 # ==========================================================
 # CHAINLIT APP
