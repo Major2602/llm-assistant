@@ -169,11 +169,26 @@ async def wikipedia_rag(
     return str(response)
 
 
-agent = create_agent(
-    model=llm,
-    tools=[
-        wikipedia_rag
-    ],
+_agent = None
+
+
+def get_agent():
+
+    global _agent
+
+    if _agent is None:
+
+        _agent = create_agent(
+            model=llm,
+            tools=[
+                wikipedia_rag
+            ],
+            system_prompt="""
+            You are Qwen assistant.
+            """
+        )
+
+    return _agent
 
     system_prompt="""
 
@@ -190,30 +205,22 @@ Answer in the user's language.
 )
 
 
-async def ask_agent(
-    text:str
-):
+async def ask_agent(text):
 
+    agent = get_agent()
 
     result = await agent.ainvoke(
-
         {
-            "messages":
-            [
+            "messages":[
                 {
                     "role":"user",
                     "content":text
                 }
             ]
         }
-
     )
 
-    return (
-        result["messages"]
-        [-1]
-        .content
-    )
+    return result["messages"][-1].content
 
 # ==========================================================
 # CHAINLIT APP
