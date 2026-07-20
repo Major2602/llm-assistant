@@ -141,7 +141,7 @@ def get_agent():
     if _agent is None:
 
         _agent = create_agent(
-            model=get_llm,
+            model=get_llm(),
             tools=[
                 wikipedia_rag
             ],
