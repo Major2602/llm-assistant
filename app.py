@@ -34,19 +34,102 @@ def get_llm():
 # файл: rag/wikipedia.py
 # ==========================================================
 
-from llama_index.readers.wikipedia import WikipediaReader
+import requests
 
-def load_wikipedia(topic:str):
+from langdetect import detect, LangDetectException
+from llama_index.core import Document
 
-    reader = WikipediaReader()
+SUPPORTED_LANGS = {"en", "ru", "de", "fr", "es", "it", "pt", "ja", "zh", "ar"}
 
-    documents = reader.load_data(
-        pages=[
-            topic
-        ]
+
+def _search(api: str, entity: str):
+
+    response = requests.get(
+        api,
+        params={
+            "action": "query",
+            "list": "search",
+            "srsearch": entity,
+            "utf8": 1,
+            "format": "json",
+        },
+        headers={
+            "User-Agent": "Chainlit-RAG/1.0"
+        },
+        timeout=20,
     )
 
-    return documents
+    response.raise_for_status()
+
+    return response.json()["query"]["search"]
+
+
+def _page(api: str, title: str):
+
+    response = requests.get(
+        api,
+        params={
+            "action": "query",
+            "prop": "extracts",
+            "titles": title,
+            "explaintext": 1,
+            "format": "json",
+        },
+        headers={
+            "User-Agent": "Chainlit-RAG/1.0"
+        },
+        timeout=20,
+    )
+
+    response.raise_for_status()
+    pages = response.json()["query"]["pages"]
+    page = next(iter(pages.values()))
+
+    return page.get("extract", "")
+
+
+def _load(entity: str, lang: str):
+
+    api = f"https://{lang}.wikipedia.org/w/api.php"
+    results = _search(api, entity)
+
+    if not results:
+        return None
+
+    title = results[0]["title"]
+    text = _page(api, title)
+
+    if not text.strip():
+        return None
+
+    return Document(
+        text=text,
+        metadata={
+            "title": title,
+            "language": lang,
+            "source": f"https://{lang}.wikipedia.org/wiki/{title.replace(' ','_')}"
+        }
+    )
+
+def load_wikipedia(entity: str):
+
+    try:
+        lang = detect(entity)
+    except LangDetectException:
+        lang = "en"
+
+    if lang not in SUPPORTED_LANGS:
+        lang = "en"
+
+    document = _load(entity, lang)
+
+    if document is None and lang != "en":
+        document = _load(entity, "en")
+
+    if document is None:
+        raise ValueError(f"Wikipedia article '{entity}' not found.")
+
+    return [document]
 
 # ==========================================================
 # RAG INDEX
@@ -71,22 +154,22 @@ def get_embed_model():
 
 _indexes = {}
 
-def get_query_engine(topic:str):
+def get_query_engine(entity: str):
 
     Settings.embed_model = get_embed_model()
 
-    if topic not in _indexes:
+    if entity not in _indexes:
 
-        docs = load_wikipedia(topic)
+        docs = load_wikipedia(entity)
 
         index = VectorStoreIndex.from_documents(
             docs
         )
 
-        _indexes[topic] = index
+        _indexes[entity] = index
 
 
-    return _indexes[topic].as_query_engine(
+    return _indexes[entity].as_query_engine(
         similarity_top_k=4
     )
 
@@ -100,21 +183,25 @@ from langchain.agents import create_agent
 
 @tool
 async def wikipedia_rag(
-    topic:str
+    entity: str,
+    question: str,
 )->str:
     """
-    Search Wikipedia knowledge.
+    Search Wikipedia.
     Use this tool when the user asks
     about factual information.
+    
+    entity:
+        The exact entity or page to search
+        (person, city, company, country, event, etc.)
+
+    question:
+        User's original question about this entity.
     """
 
-    engine = get_query_engine(
-        topic
-    )
+    engine = get_query_engine(entity)
 
-    response = await engine.aquery(
-        topic
-    )
+    response = await engine.aquery(question)
 
     return str(response)
 
@@ -134,14 +221,28 @@ def get_agent():
                 wikipedia_rag
             ],
             system_prompt="""
-            You are Qwen assistant.
-            You can answer normally.
-            If the user needs factual knowledge
-            or information about a topic,
-            use wikipedia_rag tool.
-            Always prefer tool results
-            over your internal memory.
-            Answer in the user's language.
+            You are a helpful assistant.
+            
+            When factual information is required, use wikipedia_rag.
+            
+            For the "entity" argument provide ONLY the entity name.
+            
+            Good examples:
+            
+            entity="Alan Turing"
+            question="Who was he?"
+            
+            entity="Python (programming language)"
+            question="Who created it?"
+            
+            entity="Tokyo"
+            question="Population"
+            
+            Never pass the entire user message as entity.
+            
+            Always answer in the user's language.
+            
+            Always prefer the tool result over your own knowledge.
             """
         )
 
