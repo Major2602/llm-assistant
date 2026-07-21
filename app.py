@@ -3,13 +3,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-MODEL_NAME = os.getenv(
-    "MODEL_NAME",
-    "Qwen/Qwen3.5-2B"
-)
-
-HF_PROVIDER = "featherless-ai"
-
 # ==========================================================
 # LLM
 # файл: llm.py
@@ -19,7 +12,7 @@ from langchain_openai import ChatOpenAI
 
 MODEL_NAME = os.getenv(
     "MODEL_NAME",
-    "Qwen/Qwen3.5-2B"
+    "qwen/qwen3.6-27b"
 )
 
 _llm = None
@@ -28,9 +21,9 @@ def get_llm():
     global _llm
     if _llm is None:
         _llm = ChatOpenAI(
-            model=f"{MODEL_NAME}:{HF_PROVIDER}",
-            base_url="https://router.huggingface.co/v1",
-            api_key=os.environ["HF_TOKEN"],
+            model=f"{MODEL_NAME}",
+            base_url="https://api.groq.com/openai/v1",
+            api_key=os.environ["GROQ_TOKEN"],
             temperature=0.2,
             max_tokens=2048,
         )
