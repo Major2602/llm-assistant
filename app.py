@@ -328,7 +328,7 @@ from qdrant_client.models import (
 )
 
 
-from rag.cloudflare_embeddings import get_embedding_model
+#from rag.cloudflare_embeddings import get_embedding_model
 
 
 # ---------------------------------------------------------
