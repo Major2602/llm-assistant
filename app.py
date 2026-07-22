@@ -607,45 +607,30 @@ def update_last_access(
 # Delete old data
 # ---------------------------------------------------------
 
-def cleanup_old_chunks(
-    days: int = 30
-):
+def cleanup_old_chunks(days: int = 30):
+    client = get_qdrant()
 
-    """
-    Удаляет данные,
-    которые не использовались N дней.
-    """
+    collections = {
+        c.name for c in client.get_collections().collections
+    }
 
+    if COLLECTION_NAME not in collections:
+        return
 
     cutoff = (
-        datetime.now(timezone.utc)
-        -
-        timedelta(days=days)
+        datetime.now(timezone.utc) - timedelta(days=days)
     ).timestamp()
 
-
-    get_qdrant().delete(
-
+    client.delete(
         collection_name=COLLECTION_NAME,
-
         points_selector=Filter(
-
             must=[
-
                 FieldCondition(
-
                     key="last_access",
-
-                    range=Range(
-                        lt=cutoff
-                    ),
-
+                    range=Range(lt=cutoff),
                 )
-
             ]
-
-        )
-
+        ),
     )
 
 # ==========================================================
