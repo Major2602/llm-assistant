@@ -255,10 +255,7 @@ class CloudflareEmbeddings:
         if not payload.get("success", False):
             raise CloudflareEmbeddingError(payload.get("errors"))
 
-        return [
-            item["embedding"]
-            for item in payload["result"]["data"]
-        ]
+        return payload["result"]["data"]
 
 
     # --------------------------------------------------------
