@@ -878,7 +878,7 @@ async def wikipedia_rag(
     )
 
 
-    return context
+    return "TOOL WORKS" #context
 
 
 
@@ -988,6 +988,8 @@ async def ask_agent(
 
     )
 
+    for i, m in enumerate(result["messages"]):
+        print(i, type(m).__name__, getattr(m, "content", None))
 
     return result["messages"][-1].content
 
