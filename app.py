@@ -147,7 +147,7 @@ _splitter = RecursiveCharacterTextSplitter(
 
 def _chunk_document(document: dict):
 
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(timezone.utc).timestamp()
     chunks = _splitter.split_text(document["text"])
     result = []
     for index, chunk in enumerate(chunks):
@@ -583,7 +583,7 @@ def update_last_access(
 
     now = datetime.now(
         timezone.utc
-    ).isoformat()
+    ).timestamp()
 
 
     for point_id in ids:
@@ -621,7 +621,7 @@ def cleanup_old_chunks(
         datetime.now(timezone.utc)
         -
         timedelta(days=days)
-    ).isoformat()
+    ).timestamp()
 
 
     get_qdrant().delete(
