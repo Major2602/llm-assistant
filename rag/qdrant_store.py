@@ -52,6 +52,33 @@ def get_qdrant() -> AsyncQdrantClient:
         )
 
     return _client
+    
+
+# ==========================================================
+# Payload Index
+# ==========================================================
+
+async def ensure_payload_indexes() -> None:
+
+    client = get_qdrant()
+
+    try:
+
+        await client.create_payload_index(
+            collection_name=COLLECTION_NAME,
+            field_name="last_access",
+            field_schema="integer",
+        )
+
+        logger.info(
+            "Payload index 'last_access' is ready."
+        )
+
+    except Exception:
+        logger.exception(
+            "Failed creating payload indexes."
+        )
+        raise
 
 
 # ==========================================================
@@ -65,6 +92,7 @@ async def ensure_collection(
     client = get_qdrant()
 
     try:
+        
         exists = await client.collection_exists(
             COLLECTION_NAME
         )
@@ -84,13 +112,7 @@ async def ensure_collection(
                 ),
             )
 
-        
-        await client.create_payload_index(
-            collection_name=COLLECTION_NAME,
-            field_name="last_access",
-            field_schema="integer",
-        )
-
+        await ensure_payload_indexes()
 
         logger.info(
             "Qdrant collection '%s' is ready.",
@@ -312,23 +334,33 @@ async def cleanup_old_chunks(
     days: int = 30,
 ) -> None:
 
-    cutoff = int(
-        (
-            datetime.now(
-                timezone.utc
-            )
-            - timedelta(days=days)
-        ).timestamp()
-    )
-
-    logger.info(
-        "Removing chunks older than %d days.",
-        days,
-    )
+    client = get_qdrant()
 
     try:
+        
+        if not await client.collection_exists(
+            COLLECTION_NAME
+        ):
+            logger.info(
+                "Qdrant collection '%s' does not exist. Skip cleanup.",
+                COLLECTION_NAME,
+            )
+            return
+            
+        cutoff = int(
+            (
+                datetime.now(timezone.utc)
+                - timedelta(days=days)
+            ).timestamp()
+        )
 
-        await get_qdrant().delete(
+        logger.info(
+            "Removing chunks older than %d days.",
+            days,
+        )
+
+
+        await client.delete(
             collection_name=COLLECTION_NAME,
             points_selector=Filter(
                 must=[
