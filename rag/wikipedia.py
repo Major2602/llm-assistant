@@ -1,5 +1,7 @@
+import os
 import logging
 import uuid
+import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
@@ -19,9 +21,14 @@ logger = logging.getLogger(__name__)
 
 SUPPORTED_LANGS = {"en", "ru", "de", "fr", "es", "it", "pt", "ja", "zh", "ar"}
 
-USER_AGENT = "Chainlit-RAG/2.0"
+USER_AGENT = os.getenv(
+    "WIKI_USER_AGENT",
+    "Chainlit-RAG/2.0 (https://github.com/your/repo)
+)
 
 REQUEST_TIMEOUT = 20.0
+WIKI_CONCURRENCY = 1
+_semaphore = asyncio.Semaphore(WIKI_CONCURRENCY)
 
 CHUNK_SIZE = 700
 CHUNK_OVERLAP = 100
@@ -30,6 +37,9 @@ _client = httpx.AsyncClient(
     timeout=httpx.Timeout(REQUEST_TIMEOUT),
     headers={"User-Agent": USER_AGENT},
     follow_redirects=True,
+    limits = httpx.Limits(
+        max_connections=5,
+        max_keepalive_connections=1)
 )
 
 _splitter = RecursiveCharacterTextSplitter(
@@ -55,32 +65,37 @@ async def _search(api: str, entity: str) -> list[dict[str, Any]]:
     """Search Wikipedia for an article."""
 
     try:
+        
         logger.debug("Wikipedia search: '%s' (%s)", entity, api)
 
-        response = await _client.get(
-            api,
-            params={
-                "action": "query",
-                "list": "search",
-                "srsearch": entity,
-                "utf8": 1,
-                "format": "json",
-            },
-        )
+        async with _semaphore:
 
-        # response.raise_for_status()
-        if response.status_code != 200:
-            logger.error("Wikipedia status=%s", response.status_code)
-            logger.error("Headers: %s", response.headers)
-            logger.error("Body: %s", response.text)
-            response.raise_for_status()
+            await asyncio.sleep(float(os.getenv("WIKI_REQUEST_DELAY", "0.5")))
+            
+            response = await _client.get(
+                api,
+                params={
+                    "action": "query",
+                    "list": "search",
+                    "srsearch": entity,
+                    "utf8": 1,
+                    "format": "json",
+                },
+            )
 
-        data = response.json()
+            # response.raise_for_status()
+            if response.status_code != 200:
+                logger.error("Wikipedia status=%s", response.status_code)
+                logger.error("Headers: %s", response.headers)
+                logger.error("Body: %s", response.text)
+                response.raise_for_status()
 
-        return (
-            data.get("query", {})
-            .get("search", [])
-        )
+            data = response.json()
+
+            return (
+                data.get("query", {})
+                .get("search", [])
+            )
 
     except httpx.HTTPError:
         logger.exception("Wikipedia search failed for '%s'.", entity)
@@ -97,32 +112,37 @@ async def _page(api: str, title: str) -> str:
     """Load Wikipedia article text."""
 
     try:
-        response = await _client.get(
-            api,
-            params={
-                "action": "query",
-                "prop": "extracts",
-                "titles": title,
-                "explaintext": 1,
-                "format": "json",
-            },
-        )
+        
+        async with _semaphore:
 
-        response.raise_for_status()
+            await asyncio.sleep(float(os.getenv("WIKI_REQUEST_DELAY", "0.5")))
+            
+            response = await _client.get(
+                api,
+                params={
+                    "action": "query",
+                    "prop": "extracts",
+                    "titles": title,
+                    "explaintext": 1,
+                    "format": "json",
+                },
+            )
 
-        data = response.json()
+            response.raise_for_status()
 
-        pages = (
-            data.get("query", {})
-            .get("pages", {})
-        )
+            data = response.json()
 
-        if not pages:
-            return ""
+            pages = (
+                data.get("query", {})
+                .get("pages", {})
+            )
 
-        page = next(iter(pages.values()))
+            if not pages:
+                return ""
 
-        return page.get("extract", "")
+            page = next(iter(pages.values()))
+
+            return page.get("extract", "")
 
     except httpx.HTTPError:
         logger.exception("Failed loading Wikipedia page '%s'.", title)
