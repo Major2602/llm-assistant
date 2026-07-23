@@ -27,6 +27,7 @@ USER_AGENT = os.getenv(
 )
 
 REQUEST_TIMEOUT = 20.0
+WIKI_REQUEST_DELAY = 0.5
 WIKI_CONCURRENCY = 1
 _semaphore = asyncio.Semaphore(WIKI_CONCURRENCY)
 
@@ -38,7 +39,7 @@ _client = httpx.AsyncClient(
     headers={"User-Agent": USER_AGENT},
     follow_redirects=True,
     limits = httpx.Limits(
-        max_connections=5,
+        max_connections=1,
         max_keepalive_connections=1)
 )
 
@@ -70,7 +71,7 @@ async def _search(api: str, entity: str) -> list[dict[str, Any]]:
 
         async with _semaphore:
 
-            await asyncio.sleep(float(os.getenv("WIKI_REQUEST_DELAY", "0.5")))
+            await asyncio.sleep(WIKI_REQUEST_DELAY)
             
             response = await _client.get(
                 api,
@@ -115,7 +116,7 @@ async def _page(api: str, title: str) -> str:
         
         async with _semaphore:
 
-            await asyncio.sleep(float(os.getenv("WIKI_REQUEST_DELAY", "0.5")))
+            await asyncio.sleep(WIKI_REQUEST_DELAY)
             
             response = await _client.get(
                 api,
