@@ -1,0 +1,341 @@
+import logging
+import os
+from datetime import datetime, timedelta, timezone
+
+from qdrant_client import AsyncQdrantClient
+from qdrant_client.models import (
+    Distance,
+    FieldCondition,
+    Filter,
+    MatchValue,
+    PointStruct,
+    Range,
+    VectorParams,
+)
+
+from rag.cloudflare_embeddings import get_embedding_model
+
+logger = logging.getLogger(__name__)
+
+# ==========================================================
+# Configuration
+# ==========================================================
+
+QDRANT_URL = os.getenv("QDRANT_URL")
+
+if not QDRANT_URL:
+    raise RuntimeError("Environment variable QDRANT_URL is not configured.")
+
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
+
+COLLECTION_NAME = os.getenv(
+    "QDRANT_COLLECTION",
+    "wikipedia",
+)
+
+# ==========================================================
+# Client
+# ==========================================================
+
+_client: AsyncQdrantClient | None = None
+
+
+def get_qdrant() -> AsyncQdrantClient:
+    global _client
+
+    if _client is None:
+        logger.info("Initializing AsyncQdrantClient.")
+
+        _client = AsyncQdrantClient(
+            url=QDRANT_URL,
+            api_key=QDRANT_API_KEY,
+        )
+
+    return _client
+
+
+# ==========================================================
+# Collection
+# ==========================================================
+
+async def ensure_collection(
+    vector_size: int,
+) -> None:
+
+    client = get_qdrant()
+
+    try:
+        exists = await client.collection_exists(
+            COLLECTION_NAME
+        )
+
+        if exists:
+            return
+
+        logger.info(
+            "Creating Qdrant collection '%s'.",
+            COLLECTION_NAME,
+        )
+
+        await client.create_collection(
+            collection_name=COLLECTION_NAME,
+            vectors_config=VectorParams(
+                size=vector_size,
+                distance=Distance.COSINE,
+            ),
+        )
+
+    except Exception:
+        logger.exception(
+            "Failed ensuring collection '%s'.",
+            COLLECTION_NAME,
+        )
+        raise
+
+
+# ==========================================================
+# Insert
+# ==========================================================
+
+async def add_chunks(
+    chunks: list[dict],
+) -> None:
+
+    if not chunks:
+        return
+
+    logger.info(
+        "Adding %d chunks into Qdrant.",
+        len(chunks),
+    )
+
+    embedder = get_embedding_model()
+
+    texts = [
+        chunk["text"]
+        for chunk in chunks
+    ]
+
+    try:
+
+        vectors = await embedder.embed_documents(
+            texts
+        )
+
+        if not vectors:
+            raise RuntimeError(
+                "Embedding model returned no vectors."
+            )
+
+        if len(vectors) != len(chunks):
+            raise RuntimeError(
+                "Embedding count does not match chunk count."
+            )
+
+        await ensure_collection(
+            len(vectors[0])
+        )
+
+        points = [
+
+            PointStruct(
+                id=chunk["id"],
+                vector=vector,
+                payload=chunk,
+            )
+
+            for chunk, vector in zip(
+                chunks,
+                vectors,
+            )
+
+        ]
+
+        await get_qdrant().upsert(
+            collection_name=COLLECTION_NAME,
+            points=points,
+        )
+
+        logger.info(
+            "Inserted %d chunks.",
+            len(points),
+        )
+
+    except Exception:
+        logger.exception(
+            "Failed inserting chunks into Qdrant."
+        )
+        raise
+
+
+# ==========================================================
+# Search
+# ==========================================================
+
+async def search(
+    question: str,
+    entity: str,
+    limit: int = 5,
+    score_threshold: float = 0.75,
+) -> list[dict]:
+
+    logger.info(
+        "Searching entity='%s' limit=%d threshold=%.2f",
+        entity,
+        limit,
+        score_threshold,
+    )
+
+    embedder = get_embedding_model()
+
+    try:
+
+        query_vector = await embedder.embed_query(
+            question
+        )
+
+        await ensure_collection(
+            len(query_vector)
+        )
+
+        result = await get_qdrant().query_points(
+            collection_name=COLLECTION_NAME,
+            query=query_vector,
+            query_filter=Filter(
+                must=[
+                    FieldCondition(
+                        key="entity",
+                        match=MatchValue(
+                            value=entity,
+                        ),
+                    )
+                ]
+            ),
+            limit=limit,
+            score_threshold=score_threshold,
+        )
+
+        hits = result.points
+
+        if not hits:
+            logger.info(
+                "No chunks found."
+            )
+            return []
+
+        await update_last_access(
+            [
+                point.id
+                for point in hits
+            ]
+        )
+
+        logger.info(
+            "Found %d chunks.",
+            len(hits),
+        )
+
+        return [
+
+            {
+                **point.payload,
+                "score": point.score,
+            }
+
+            for point in hits
+
+        ]
+
+    except Exception:
+        logger.exception(
+            "Qdrant search failed."
+        )
+        raise
+
+
+# ==========================================================
+# Update access
+# ==========================================================
+
+async def update_last_access(
+    ids: list[str],
+) -> None:
+
+    if not ids:
+        return
+
+    timestamp = int(
+        datetime.now(
+            timezone.utc
+        ).timestamp()
+    )
+
+    try:
+
+        await get_qdrant().set_payload(
+            collection_name=COLLECTION_NAME,
+            payload={
+                "last_access": timestamp
+            },
+            points=ids,
+        )
+
+        logger.debug(
+            "Updated last_access for %d chunks.",
+            len(ids),
+        )
+
+    except Exception:
+        logger.exception(
+            "Failed updating last_access."
+        )
+        raise
+
+
+# ==========================================================
+# Cleanup
+# ==========================================================
+
+async def cleanup_old_chunks(
+    days: int = 30,
+) -> None:
+
+    cutoff = int(
+        (
+            datetime.now(
+                timezone.utc
+            )
+            - timedelta(days=days)
+        ).timestamp()
+    )
+
+    logger.info(
+        "Removing chunks older than %d days.",
+        days,
+    )
+
+    try:
+
+        await get_qdrant().delete(
+            collection_name=COLLECTION_NAME,
+            points_selector=Filter(
+                must=[
+                    FieldCondition(
+                        key="last_access",
+                        range=Range(
+                            lt=cutoff,
+                        ),
+                    )
+                ]
+            ),
+        )
+
+        logger.info(
+            "Cleanup finished."
+        )
+
+    except Exception:
+        logger.exception(
+            "Failed cleaning old chunks."
+        )
+        raise
