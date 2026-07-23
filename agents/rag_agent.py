@@ -219,3 +219,35 @@ async def ask_agent(
             "Agent execution failed."
         )
         raise
+
+
+async def ask_agent_stream(
+    text: str,
+):
+    """
+    Stream agent response tokens.
+    """
+
+    agent = get_agent()
+
+
+    async for event in agent.astream_events(
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": text,
+                }
+            ]
+        },
+        version="v2",
+    ):
+
+        if event["event"] == "on_chat_model_stream":
+
+            chunk = event["data"]["chunk"]
+
+            content = chunk.content
+
+            if content:
+                yield content
