@@ -53,6 +53,7 @@ def get_llm() -> ChatOpenAI:
             max_tokens=MAX_TOKENS,
             timeout=TIMEOUT,
             max_retries=MAX_RETRIES,
+            streaming=True
         )
 
         logger.info("ChatOpenAI initialized successfully.")
