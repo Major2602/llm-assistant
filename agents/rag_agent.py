@@ -33,7 +33,7 @@ async def web_search(
 
     logger.info(
         "Web search tool called. Query='%s'",
-        entity,
+        query,
     )
 
     try:
