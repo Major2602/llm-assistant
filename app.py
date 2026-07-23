@@ -93,6 +93,8 @@ async def main(
                 token
             )
 
+        await msg.update()
+
 
         logger.info(
             "Streaming response completed."
@@ -109,4 +111,4 @@ async def main(
             "Произошла ошибка при обработке запроса"
         )
         
-        await msg.update
+        await msg.update()
