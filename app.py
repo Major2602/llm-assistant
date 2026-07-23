@@ -4,8 +4,22 @@ import chainlit as cl
 
 from agents.rag_agent import ask_agent
 
+logging.basicConfig(
+    level=logging.INFO,
+    format=(
+        "%(asctime)s "
+        "%(levelname)s "
+        "%(name)s "
+        "%(message)s"
+    ),
+)
+
+# logging.getLogger("httpx").setLevel(logging.WARNING)
+# logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
+
+logger.info("App module loaded.")
 
 
 # ==========================================================
@@ -26,14 +40,18 @@ async def start() -> None:
     await cl.Message(
         content=
         """
-Привет!
+Hello!
 
-Я Qwen3.5 ассистент.
+I am **agentic AI assistant** based on Qwen 3.6 model.
 
-Умею:
-- вести обычный диалог
-- искать информацию через RAG
-- использовать Wikipedia
+My capabilites:
+
+- Knowledge of 201 language and dialect.
+- RAG (Retrieval-Augmented Generation).
+- Instantly updated factual knowledge database.
+- 16384 token long context window.
+- Input: text and image.
+- Output: text.
 
 """
     ).send()
