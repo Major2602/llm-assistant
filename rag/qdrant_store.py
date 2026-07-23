@@ -70,8 +70,14 @@ async def ensure_payload_index() -> None:
             field_schema="integer",
         )
 
+        await client.create_payload_index(
+            collection_name=COLLECTION_NAME,
+            field_name="entity",
+            field_schema="keyword",
+        )
+
         logger.info(
-            "Payload index 'last_access' is ready."
+            "Payload indexes are ready."
         )
 
     except Exception:
