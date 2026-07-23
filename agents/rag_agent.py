@@ -42,7 +42,7 @@ async def web_search(
 
         logger.info(
             "Web search tool returned context for '%s'.",
-            entity,
+            query,
         )
 
         return context
@@ -50,7 +50,7 @@ async def web_search(
     except Exception:
         logger.exception(
             "Web search tool failed for '%s'.",
-            entity,
+            query,
         )
         raise
 
