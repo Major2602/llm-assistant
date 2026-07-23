@@ -24,6 +24,7 @@ _splitter = RecursiveCharacterTextSplitter(
 )
 
 _retriever = ExaSearchRetriever(
+    api_key=os.getenv("EXA_TOKEN"),
     k=5,
     text_contents=True,
 )
@@ -53,7 +54,7 @@ def _chunk_documents(
     Convert Exa documents into Qdrant chunks.
     """
 
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(timezone.utc).timestamp()
 
     result: list[dict[str, str | int]] = []
 
