@@ -69,20 +69,32 @@ async def ensure_collection(
             COLLECTION_NAME
         )
 
-        if exists:
-            return
+        if not exists:
 
-        logger.info(
-            "Creating Qdrant collection '%s'.",
-            COLLECTION_NAME,
+            logger.info(
+                "Creating Qdrant collection '%s'.",
+                COLLECTION_NAME,
+            )
+
+            await client.create_collection(
+                collection_name=COLLECTION_NAME,
+                vectors_config=VectorParams(
+                    size=vector_size,
+                    distance=Distance.COSINE,
+                ),
+            )
+
+        
+        await client.create_payload_index(
+            collection_name=COLLECTION_NAME,
+            field_name="last_access",
+            field_schema="integer",
         )
 
-        await client.create_collection(
-            collection_name=COLLECTION_NAME,
-            vectors_config=VectorParams(
-                size=vector_size,
-                distance=Distance.COSINE,
-            ),
+
+        logger.info(
+            "Qdrant collection '%s' is ready.",
+            COLLECTION_NAME,
         )
 
     except Exception:
