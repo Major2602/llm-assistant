@@ -17,9 +17,8 @@ logger = logging.getLogger(__name__)
 
 
 @tool
-async def wikipedia_rag(
-    entity: str,
-    question: str,
+async def web_search(
+    query: str
 ) -> str:
     """
     Search Wikipedia using RAG.
@@ -33,19 +32,16 @@ async def wikipedia_rag(
     """
 
     logger.info(
-        "Wikipedia RAG tool called. Entity='%s'",
+        "Web search tool called. Query='%s'",
         entity,
     )
 
     try:
 
-        context = await get_context(
-            entity=entity,
-            question=question,
-        )
+        context = await get_context(query)
 
         logger.info(
-            "Wikipedia RAG returned context for '%s'.",
+            "Web search tool returned context for '%s'.",
             entity,
         )
 
@@ -53,7 +49,7 @@ async def wikipedia_rag(
 
     except Exception:
         logger.exception(
-            "Wikipedia RAG tool failed for '%s'.",
+            "Web search tool failed for '%s'.",
             entity,
         )
         raise
@@ -97,41 +93,8 @@ def get_agent() -> Any:
 
 You are a helpful assistant.
 
-When factual information is required,
-always use wikipedia_rag.
-
-The tool retrieves information from
-a Wikipedia RAG knowledge base.
-
-For the "entity" argument provide
-ONLY the entity name.
-
-Correct examples:
-
-entity="Alan Turing"
-question="Who was he?"
-
-entity="Python programming language"
-question="Who created it?"
-
-entity="Tokyo"
-question="Population"
-
-
-Incorrect:
-
-entity="Who created Python?"
-entity="Tell me everything about Tokyo"
-
-
-Never pass the entire user message
-as entity.
-
-
-Use information returned by
-wikipedia_rag as the primary source
-for factual answers.
-
+Search the web using web_search and return relevant context.
+Use this tool whenever up-to-date or factual information is needed.
 
 Answer in the user's language.
 
