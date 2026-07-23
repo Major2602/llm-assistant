@@ -120,11 +120,19 @@ class CloudflareEmbeddings:
                 .get("data", [])
             )
 
-            embeddings = [
-                item.get("embedding")
-                for item in data
-                if item.get("embedding") is not None
-            ]
+            if not isinstance(data, list):
+                raise CloudflareEmbeddingError(
+                    "Invalid embeddings response format."
+                )
+
+            embeddings = []
+
+            for item in data:
+                if isinstance(item, list):
+                    embeddings.append(item)
+
+                elif isinstance (item, dict) and item.get("embedding"):
+                    embeddings.append(item["embedding"])
 
             if len(embeddings) != len(texts):
                 logger.error(
