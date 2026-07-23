@@ -105,7 +105,8 @@ async def main(
             "Failed processing user message."
         )
 
-        await msg.update(
-            content=
-            "Произошла ошибка при обработке запроса."
+        msg.content = (
+            "Произошла ошибка при обработке запроса"
         )
+        
+        await msg.update
