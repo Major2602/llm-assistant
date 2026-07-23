@@ -58,7 +58,7 @@ def get_qdrant() -> AsyncQdrantClient:
 # Payload Index
 # ==========================================================
 
-async def ensure_payload_indexes() -> None:
+async def ensure_payload_index() -> None:
 
     client = get_qdrant()
 
