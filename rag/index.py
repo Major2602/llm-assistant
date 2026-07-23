@@ -8,7 +8,7 @@ from rag.qdrant_store import (
     search,
     ensure_payload_index
 )
-from rag.wikipedia import load_wikipedia
+from rag.exa import search_exa
 
 logger = logging.getLogger(__name__)
 
@@ -126,28 +126,28 @@ async def get_context(
             return _format_context(chunks)
 
         logger.info(
-            "No cached chunks found. Loading Wikipedia."
+            "No cached chunks found. Searching Exa."
         )
 
         # -------------------------------------------------
         # 2. Wikipedia fallback
         # -------------------------------------------------
 
-        wikipedia_chunks = await load_wikipedia(entity)
+        web_chunks = await search_exa(entity)
 
         logger.info(
-            "Loaded %d chunks from Wikipedia.",
-            len(wikipedia_chunks),
+            "Loaded %d chunks from Exa.",
+            len(web_chunks),
         )
 
         # -------------------------------------------------
         # 3. Store in Qdrant
         # -------------------------------------------------
 
-        await add_chunks(wikipedia_chunks)
+        await add_chunks(web_chunks)
 
         logger.info(
-            "Wikipedia chunks stored in Qdrant."
+            "Exa chunks stored in Qdrant."
         )
 
         # -------------------------------------------------
@@ -164,7 +164,7 @@ async def get_context(
         if not chunks:
             logger.warning(
                 "No chunks returned after indexing. "
-                "Using Wikipedia chunks directly."
+                "Using Exa chunks directly."
             )
             chunks = wikipedia_chunks[:TOP_K]
 
