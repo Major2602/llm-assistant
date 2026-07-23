@@ -112,7 +112,7 @@ async def ensure_collection(
                 ),
             )
 
-        await ensure_payload_indexes()
+        await ensure_payload_index()
 
         logger.info(
             "Qdrant collection '%s' is ready.",
