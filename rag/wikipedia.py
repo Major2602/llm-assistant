@@ -68,7 +68,12 @@ async def _search(api: str, entity: str) -> list[dict[str, Any]]:
             },
         )
 
-        response.raise_for_status()
+        # response.raise_for_status()
+        if response.status_code != 200:
+            logger.error("Wikipedia status=%s", response.status_code)
+            logger.error("Headers: %s", response.headers)
+            logger.error("Body: %s", response.text)
+            response.raise_for_status()
 
         data = response.json()
 
