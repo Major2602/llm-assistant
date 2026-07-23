@@ -86,7 +86,7 @@ def get_agent() -> Any:
             model=get_llm(),
 
             tools=[
-                wikipedia_rag,
+                web_search,
             ],
 
             system_prompt="""
