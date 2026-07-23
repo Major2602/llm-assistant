@@ -5,7 +5,8 @@ from typing import Any
 from rag.qdrant_store import (
     add_chunks,
     cleanup_old_chunks,
-    search
+    search,
+    ensure_payload_index
 )
 from rag.wikipedia import load_wikipedia
 
@@ -43,6 +44,7 @@ async def init_rag() -> None:
         try:
             logger.info("Initializing RAG subsystem.")
 
+            await ensure_payload_index()
             await cleanup_old_chunks(days=30)
 
             _initialized = True
