@@ -12,6 +12,7 @@ chainlit>=2.11.1
 langchain>=1.3.14
 langchain-openai>=1.0.0
 langchain-text-splitters>=1.0.0
+langchain-exa
 
 openai>=1.60.0
 
