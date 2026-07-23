@@ -23,7 +23,7 @@ SUPPORTED_LANGS = {"en", "ru", "de", "fr", "es", "it", "pt", "ja", "zh", "ar"}
 
 USER_AGENT = os.getenv(
     "WIKI_USER_AGENT",
-    "Chainlit-RAG/2.0 (https://github.com/your/repo)
+    "Chainlit-RAG/2.0 (https://github.com/your/repo)"
 )
 
 REQUEST_TIMEOUT = 20.0
