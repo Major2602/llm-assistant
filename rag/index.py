@@ -6,6 +6,7 @@ from rag.qdrant_store import (
     add_chunks,
     cleanup_old_chunks,
     search,
+    ensure_collection
 )
 from rag.wikipedia import load_wikipedia
 
@@ -43,6 +44,7 @@ async def init_rag() -> None:
         try:
             logger.info("Initializing RAG subsystem.")
 
+            await ensure_collection()
             await cleanup_old_chunks(days=30)
 
             _initialized = True
