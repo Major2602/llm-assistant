@@ -80,8 +80,7 @@ async def main(
         content=""
     )
 
-    await msg.send()
-
+    sent = False
 
     try:
 
@@ -89,8 +88,13 @@ async def main(
             message.content
         ):
 
+            if not sent:
+
+                await msg.send()
+                sent = True
+
             await msg.stream_token(
-                token
+                    token
             )
 
         await msg.update()
