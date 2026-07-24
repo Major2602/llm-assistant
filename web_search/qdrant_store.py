@@ -12,7 +12,7 @@ from qdrant_client.models import (
     VectorParams,
 )
 
-from rag.cloudflare_embeddings import get_embedding_model
+from web_search.cloudflare_embeddings import get_embedding_model
 
 logger = logging.getLogger(__name__)
 
