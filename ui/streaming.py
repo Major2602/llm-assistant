@@ -1,5 +1,5 @@
 import logging
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 from agents.web_search_agent import get_agent
 
@@ -12,19 +12,140 @@ from ui.events import (
 logger = logging.getLogger(__name__)
 
 
+def _extract_text_from_chunk(
+    chunk: Any,
+) -> str | None:
+    """
+    Normalize LangChain AIMessageChunk content.
+
+    LangChain 1.x may return:
+    - str
+    - list content blocks
+    - None
+    """
+
+    if chunk is None:
+        return None
+
+
+    content = getattr(
+        chunk,
+        "content",
+        None,
+    )
+
+
+    if not content:
+        return None
+
+
+    # Standard case:
+    # "hello"
+    if isinstance(
+        content,
+        str,
+    ):
+        return content
+
+
+    # Multimodal/content blocks:
+    # [
+    #   {
+    #       "type": "text",
+    #       "text": "hello"
+    #   }
+    # ]
+
+    if isinstance(
+        content,
+        list,
+    ):
+
+        parts: list[str] = []
+
+
+        for block in content:
+
+            if not isinstance(
+                block,
+                dict,
+            ):
+                continue
+
+
+            if (
+                block.get("type")
+                == "text"
+            ):
+
+                text = block.get(
+                    "text"
+                )
+
+                if text:
+                    parts.append(
+                        text
+                    )
+
+
+        if parts:
+            return "".join(parts)
+
+
+    logger.debug(
+        "Unsupported chunk format: %s",
+        type(content),
+    )
+
+
+    return None
+
+
+
+def _extract_tool_name(
+    event: dict[str, Any],
+) -> str | None:
+    """
+    Extract tool name from LangChain event.
+    """
+
+    metadata = event.get(
+        "metadata",
+        {},
+    )
+
+
+    name = (
+        metadata.get(
+            "name"
+        )
+        or event.get(
+            "name"
+        )
+    )
+
+
+    return name
+
+
+
 async def stream_agent_events(
     text: str,
 ) -> AsyncIterator[UIEvent]:
     """
-    Convert LangChain agent events
-    into UI events.
+    Convert LangChain v2 streaming events
+    into internal UI events.
+
+    Chainlit receives only UIEvent.
     """
 
     logger.info(
-        "Starting agent stream."
+        "Starting agent event stream."
     )
 
+
     agent = get_agent()
+
 
     try:
 
@@ -40,12 +161,17 @@ async def stream_agent_events(
             version="v2",
         ):
 
-            event_type = event.get(
+
+            event_name = event.get(
                 "event"
             )
 
 
-            if event_type == (
+            # ==================================================
+            # LLM TOKEN STREAM
+            # ==================================================
+
+            if event_name == (
                 "on_chat_model_stream"
             ):
 
@@ -55,25 +181,83 @@ async def stream_agent_events(
                     .get("chunk")
                 )
 
-                if not chunk:
-                    continue
+
+                token = _extract_text_from_chunk(
+                    chunk
+                )
 
 
-                content = (
-                    getattr(
-                        chunk,
-                        "content",
-                        None,
+                if token:
+
+                    yield UIEvent(
+                        type=UIEventType.TOKEN,
+                        content=token,
+                    )
+
+
+            # ==================================================
+            # TOOL START
+            # ==================================================
+
+            elif event_name == (
+                "on_tool_start"
+            ):
+
+                tool_name = (
+                    _extract_tool_name(
+                        event
                     )
                 )
 
 
-                if content:
+                logger.info(
+                    "Tool started: %s",
+                    tool_name,
+                )
 
-                    yield UIEvent(
-                        type=UIEventType.TOKEN,
-                        content=content,
+
+                yield UIEvent(
+                    type=UIEventType.TOOL_START,
+                    content=tool_name,
+                    metadata={
+                        "tool": tool_name,
+                    },
+                )
+
+
+            # ==================================================
+            # TOOL END
+            # ==================================================
+
+            elif event_name == (
+                "on_tool_end"
+            ):
+
+                tool_name = (
+                    _extract_tool_name(
+                        event
                     )
+                )
+
+
+                logger.info(
+                    "Tool completed: %s",
+                    tool_name,
+                )
+
+
+                yield UIEvent(
+                    type=UIEventType.TOOL_END,
+                    content=tool_name,
+                    metadata={
+                        "tool": tool_name,
+                    },
+                )
+
+
+        logger.info(
+            "Agent stream completed."
+        )
 
 
         yield UIEvent(
@@ -86,6 +270,7 @@ async def stream_agent_events(
         logger.exception(
             "Agent streaming failed."
         )
+
 
         yield UIEvent(
             type=UIEventType.ERROR,
