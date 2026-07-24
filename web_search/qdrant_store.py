@@ -287,7 +287,7 @@ async def search(
         best_score = hits[0].score
 
         logger.info(
-            'Best similarity score: #.3f",
+            "Best similarity score: #.3f",
             best_score
         )
 
