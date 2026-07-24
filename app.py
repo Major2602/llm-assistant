@@ -2,8 +2,8 @@ import logging
 
 import chainlit as cl
 
-from agents.rag_agent import ask_agent
-from agents.rag_agent import ask_agent_stream
+from agents.web_search_agent import ask_agent
+from agents.web_search_agent import ask_agent_stream
 
 logging.basicConfig(
     level=logging.INFO,
