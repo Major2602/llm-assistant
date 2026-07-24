@@ -1,5 +1,6 @@
 import logging
 import os
+from typing import Any
 from datetime import datetime, timedelta, timezone
 
 from qdrant_client import AsyncQdrantClient
@@ -172,7 +173,7 @@ async def ensure_collection(
 # ==========================================================
 
 async def add_chunks(
-    chunks: list[dict],
+    chunks: list[dict[str, Any]],
 ) -> None:
 
     if not chunks:
@@ -275,6 +276,7 @@ async def search(
             collection_name=COLLECTION_NAME,
             query=query_vector,
             limit=limit,
+            with_payload=True
         )
 
         hits = result.points
