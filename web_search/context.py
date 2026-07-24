@@ -28,7 +28,7 @@ _init_lock = asyncio.Lock()
 
 async def init_web_search() -> None:
     """
-    Initialize the RAG subsystem once.
+    Initialize the web_search subsystem once.
     """
 
     global _initialized
@@ -96,7 +96,7 @@ async def get_context(
     Retrieve cache for a user query.
     """
 
-    await init_rag()
+    await init_web_search()
 
     logger.info(
         "Searching web_memory. Query='%s'",
