@@ -17,8 +17,8 @@ logger = logging.getLogger(__name__)
 
 EXA_TOKEN = os.getenv("EXA_TOKEN")
 
-CHUNK_SIZE = 700
-CHUNK_OVERLAP = 100
+CHUNK_SIZE = 1000
+CHUNK_OVERLAP = 150
 
 EXA_RESULTS = 5
 
@@ -89,7 +89,7 @@ def get_exa_retriever() -> ExaSearchRetriever:
 
 async def _search(
     query: str,
-):
+) -> list[Any]:
     """
     Execute Exa web search.
     """
@@ -159,6 +159,8 @@ def _normalize_document(
 
         "url": (
             metadata.get("url")
+            or metadata.get("source")
+            or metadata.get("link")
             or ""
         ),
 
