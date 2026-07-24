@@ -5,7 +5,7 @@ from langchain.agents import create_agent
 from langchain.tools import tool
 
 from llm import get_llm
-from rag.index import get_context
+from rag.context import get_context
 
 
 logger = logging.getLogger(__name__)
@@ -21,14 +21,16 @@ async def web_search(
     query: str
 ) -> str:
     """
-    Search Wikipedia using RAG.
+    Search the web and semantic memory.
 
-    Uses Qdrant retrieval first.
-    If no information exists:
-    - loads Wikipedia;
-    - creates embeddings;
-    - stores chunks;
-    - retrieves relevant context.
+    Workflow:
+    - searches existing knowledge in Qdrant semantic cache;
+    - if no relevant information exists, performs Exa web search;
+    - stores new information in semantic memory;
+    - returns relevant context for answering.
+
+    Use this tool for factual questions,
+    current information and external knowledge.
     """
 
     logger.info(
@@ -41,7 +43,7 @@ async def web_search(
         context = await get_context(query)
 
         logger.info(
-            "Web search tool returned context for '%s'.",
+            "web_search tool returned context for '%s'.",
             query,
         )
 
@@ -49,7 +51,7 @@ async def web_search(
 
     except Exception:
         logger.exception(
-            "Web search tool failed for '%s'.",
+            "web_search tool failed for '%s'.",
             query,
         )
         raise
@@ -91,18 +93,28 @@ def get_agent() -> Any:
 
             system_prompt="""
 
-You are a helpful assistant.
+            You are a helpful AI assistant.
 
-Search the web using web_search and return relevant context.
-Use this tool whenever up-to-date or factual information is needed.
+            Use web_search whenever factual information,
+            recent information or external knowledge is required.
 
-Answer in the user's language.
+            The tool provides information from semantic memory
+            or web search.
 
-Do not mention internal RAG,
-Qdrant, embeddings or tools
-unless the user asks about them.
+            Answer using the provided context.
 
-""",
+            Do not mention:
+            - Qdrant
+            - embeddings
+            - semantic cache
+            - Exa
+            - internal tools
+
+            unless the user asks about it.
+
+            Always answer in the user's language.
+            
+            """,
 
         )
 
