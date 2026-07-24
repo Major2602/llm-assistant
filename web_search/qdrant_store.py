@@ -275,14 +275,28 @@ async def search(
             collection_name=COLLECTION_NAME,
             query=query_vector,
             limit=limit,
-            score_threshold=score_threshold,
         )
 
         hits = result.points
 
         if not hits:
+            
+            logger.info("No chunks found.")
+            return []
+
+        best_score = hits[0].score
+
+        logger.info(
+            'Best similarity score: #.3f",
+            best_score
+        )
+
+        if best_score < score_threshold:
+            
             logger.info(
-                "No chunks found."
+                "Semantic cache miss. Best score %.3f < %.2f",
+                best_score,
+                score_threshold
             )
             return []
 
