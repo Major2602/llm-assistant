@@ -10,6 +10,7 @@ from qdrant_client.models import (
     PointStruct,
     Range,
     VectorParams,
+    PayloadSchemaType
 )
 
 from web_search.cloudflare_embeddings import get_embedding_model
@@ -57,29 +58,57 @@ def get_qdrant() -> AsyncQdrantClient:
 # Payload Index
 # ==========================================================
 
+async def _payload_index_exists(
+    field_name: str,
+) -> bool:
+    """
+    Check whether payload index already exists.
+    """
+
+    collection = await get_qdrant().get_collection(
+        COLLECTION_NAME
+    )
+
+    payload_schema = collection.payload_schema or {}
+
+    return field_name in payload_schema
+
+
+
 async def ensure_payload_indexes() -> None:
+    """
+    Create payload indexes if they do not exist.
+    """
 
     client = get_qdrant()
 
+    indexes = {
+        "last_access": "integer",
+        "query": "keyword",
+        "provider": "keyword",
+    }
+
     try:
 
-        await client.create_payload_index(
-            collection_name=COLLECTION_NAME,
-            field_name="last_access",
-            field_schema="integer",
-        )
+        for field_name, field_schema, in indexes.items():
 
-        await client.create_payload_index(
-            collection_name=COLLECTION_NAME,
-            field_name="query",
-            field_schema="keyword",
-        )
+            if await _payload_index_exists(field_name):
+                logger.debug(
+                    "Payload index '%s' already exists",
+                    field_name,
+                )
+                continue
 
-        await client.create_payload_index(
-            collection_name=COLLECTION_NAME,
-            field_name="provider",
-            field_schema="keyword",
-        )
+            logger.info(
+                "Creating payload index '%s'.",
+                field_name,
+            )
+
+            await client.create_payload_index(
+                collection_name=COLLECTION_NAME,
+                field_name=field_name,
+                field_schema=field_schema,
+            )
 
         logger.info(
             "Payload indexes are ready."
