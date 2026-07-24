@@ -5,14 +5,14 @@ from langchain.agents import create_agent
 from langchain.tools import tool
 
 from llm import get_llm
-from rag.context import get_context
+from web_search.context import get_context
 
 
 logger = logging.getLogger(__name__)
 
 
 # ==========================================================
-# RAG TOOL
+# WEB SEARCH TOOL
 # ==========================================================
 
 
@@ -80,7 +80,7 @@ def get_agent() -> Any:
     try:
 
         logger.info(
-            "Initializing RAG agent."
+            "Initializing web_search agent."
         )
 
         _agent = create_agent(
