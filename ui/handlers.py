@@ -2,26 +2,22 @@ import logging
 
 import chainlit as cl
 
-from ui.streaming import (
-    stream_agent_events,
-)
-
-from ui.events import (
-    UIEventType,
+from ui.streaming import stream_agent_events
+from ui.events import UIEventType
+from ui.tooling import (
+    get_tool_start_message,
+    get_tool_end_message,
 )
 
 
 logger = logging.getLogger(__name__)
 
 
+
 async def handle_message(
     message: cl.Message,
 ) -> None:
-    """
-    Process user message.
 
-    Chainlit receives UI events only.
-    """
 
     logger.info(
         "User message received."
@@ -36,43 +32,129 @@ async def handle_message(
     await msg.send()
 
 
+    active_steps = {}
+
+
     try:
 
         async for event in stream_agent_events(
             message.content
         ):
 
+
+            # ==========================
+            # TOKENS
+            # ==========================
+
             if event.type == (
                 UIEventType.TOKEN
             ):
 
                 await msg.stream_token(
-                    event.content or ""
+                    event.content
                 )
 
+
+
+            # ==========================
+            # TOOL START
+            # ==========================
 
             elif event.type == (
-                UIEventType.STATUS
+                UIEventType.TOOL_START
             ):
-                logger.info(
-                    "Status: %s",
-                    event.content,
+
+
+                tool_name = (
+                    event.metadata
+                    .get(
+                        "tool",
+                        "tool",
+                    )
                 )
 
+
+                step = cl.Step(
+                    name=tool_name,
+                    type="tool",
+                )
+
+
+                step.output = (
+                    get_tool_start_message(
+                        tool_name
+                    )
+                )
+
+
+                await step.send()
+
+
+                active_steps[
+                    tool_name
+                ] = step
+
+
+
+            # ==========================
+            # TOOL END
+            # ==========================
+
+            elif event.type == (
+                UIEventType.TOOL_END
+            ):
+
+
+                tool_name = (
+                    event.metadata
+                    .get(
+                        "tool",
+                        "tool",
+                    )
+                )
+
+
+                step = active_steps.get(
+                    tool_name
+                )
+
+
+                if step:
+
+                    step.output = (
+                        get_tool_end_message(
+                            tool_name
+                        )
+                    )
+
+
+                    await step.update()
+
+
+
+            # ==========================
+            # ERROR
+            # ==========================
 
             elif event.type == (
                 UIEventType.ERROR
             ):
 
+
                 msg.content = (
-                    "⚠️ Could not complete the request."
+                    "⚠️ I couldn't complete the request."
                 )
+
 
                 await msg.update()
 
-
                 return
 
+
+
+            # ==========================
+            # DONE
+            # ==========================
 
             elif event.type == (
                 UIEventType.DONE
@@ -81,8 +163,9 @@ async def handle_message(
                 await msg.update()
 
 
+
         logger.info(
-            "Response completed."
+            "Message processing completed."
         )
 
 
@@ -91,6 +174,7 @@ async def handle_message(
         logger.exception(
             "UI handler failed."
         )
+
 
         msg.content = (
             "⚠️ Unexpected error."
