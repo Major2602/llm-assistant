@@ -1,3 +1,14 @@
+"""
+Agent layer.
+
+Contains LangChain agent configuration and tools.
+
+The UI layer must not depend on this module directly.
+Streaming and event conversion are handled by ui.streaming.
+"""
+
+from __future__ import annotations
+
 import logging
 from typing import Any
 
@@ -6,7 +17,6 @@ from langchain.tools import tool
 
 from llm import get_llm
 from web_search.context import get_context
-from web_search.models import AgentContext
 
 
 logger = logging.getLogger(__name__)
@@ -16,34 +26,26 @@ logger = logging.getLogger(__name__)
 # WEB SEARCH TOOL
 # ==========================================================
 
-def _context_to_tool_text(
-    context: AgentContext,
-) -> str:
-    """
-    Convert AgentContext into
-    LLM-readable tool output.
-    """
-
-    return context.context_text
-
 
 @tool(
     response_format="content_and_artifact"
 )
 async def web_search(
-    query: str
-) -> tuple[str, dict[str, Any]]:
+    query: str,
+) -> tuple[str, dict]:
     """
     Search the web and semantic memory.
 
     Workflow:
-    - searches existing knowledge in Qdrant semantic cache;
-    - if no relevant information exists, performs Exa web search;
-    - stores new information in semantic memory;
-    - returns relevant context for answering.
+    - searches semantic memory;
+    - falls back to Exa web search if required;
+    - stores new information;
+    - returns context and source metadata.
 
-    Use this tool for factual questions,
-    current information and external knowledge.
+    Use this tool for:
+    - factual questions;
+    - current information;
+    - external knowledge.
     """
 
     logger.info(
@@ -53,23 +55,37 @@ async def web_search(
 
     try:
 
-        context = await get_context(query)
+        context = await get_context(
+            query
+        )
+
 
         logger.info(
-            "web_search tool returned context for '%s'.",
-            query,
+            "Web search completed. Sources=%d",
+            len(
+                context.sources
+            ),
         )
+
+
+        artifact = {
+            "sources": context.sources,
+        }
+
 
         return (
-            _context_to_tool_text(context),
-            {"sources": context.sources}
+            context.text,
+            artifact,
         )
 
+
     except Exception:
+
         logger.exception(
             "web_search tool failed for '%s'.",
             query,
         )
+
         raise
 
 
@@ -82,12 +98,14 @@ async def web_search(
 _agent: Any | None = None
 
 
+
 def get_agent() -> Any:
     """
     Create and return singleton LangChain agent.
     """
 
     global _agent
+
 
     if _agent is not None:
         return _agent
@@ -99,6 +117,7 @@ def get_agent() -> Any:
             "Initializing web_search agent."
         )
 
+
         _agent = create_agent(
 
             model=get_llm(),
@@ -107,45 +126,57 @@ def get_agent() -> Any:
                 web_search,
             ],
 
+
             system_prompt="""
 
-            You are a helpful AI assistant.
+You are a helpful AI assistant.
 
-            Use web_search whenever factual information,
-            recent information or external knowledge is required.
+Use web_search whenever:
 
-            The tool provides information from semantic memory
-            or web search.
+- factual information is required;
+- recent information is required;
+- external knowledge is needed.
 
-            Answer using the provided context.
+The tool provides relevant context and sources.
 
-            Do not mention:
-            - Qdrant
-            - embeddings
-            - semantic cache
-            - Exa
-            - internal tools
+Answer using the provided information.
 
-            unless the user asks about it.
+Rules:
 
-            Always answer in the user's language.
-            
-            """,
+- Do not mention internal implementation details.
+- Do not mention:
+    - Qdrant
+    - embeddings
+    - semantic cache
+    - Exa
+    - internal tools
+
+unless the user explicitly asks.
+
+Always answer in the user's language.
+
+When sources are provided, use them naturally
+and avoid inventing unsupported facts.
+
+""",
 
         )
 
 
         logger.info(
-            "RAG agent initialized successfully."
+            "Web search agent initialized successfully."
         )
+
 
         return _agent
 
 
     except Exception:
+
         logger.exception(
-            "Failed initializing RAG agent."
+            "Failed initializing web_search agent."
         )
+
         raise
 
 
@@ -159,16 +190,20 @@ async def ask_agent(
     text: str,
 ) -> str:
     """
-    Send user message to the agent.
+    Execute agent without streaming.
+
+    Used for testing or non-UI integrations.
     """
 
     logger.info(
         "Agent request received."
     )
 
+
     try:
 
         agent = get_agent()
+
 
         result = await agent.ainvoke(
             {
@@ -183,13 +218,20 @@ async def ask_agent(
 
 
         messages = (
-            result.get("messages", [])
-            if isinstance(result, dict)
+            result.get(
+                "messages",
+                []
+            )
+            if isinstance(
+                result,
+                dict,
+            )
             else []
         )
 
 
         if not messages:
+
             raise RuntimeError(
                 "Agent returned empty response."
             )
@@ -202,43 +244,14 @@ async def ask_agent(
             "Agent response generated successfully."
         )
 
+
         return response
 
 
     except Exception:
+
         logger.exception(
             "Agent execution failed."
         )
+
         raise
-
-
-async def ask_agent_stream(
-    text: str,
-):
-    """
-    Stream agent response tokens.
-    """
-
-    agent = get_agent()
-
-
-    async for event in agent.astream_events(
-        {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": text,
-                }
-            ]
-        },
-        version="v2",
-    ):
-
-        if event["event"] == "on_chat_model_stream":
-
-            chunk = event["data"]["chunk"]
-
-            content = chunk.content
-
-            if content:
-                yield content
