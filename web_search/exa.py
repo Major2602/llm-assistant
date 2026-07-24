@@ -15,6 +15,8 @@ logger = logging.getLogger(__name__)
 # Configuration
 # ==========================================================
 
+EXA_TOKEN = os.getenv("EXA_TOKEN")
+
 CHUNK_SIZE = 700
 CHUNK_OVERLAP = 100
 
@@ -55,8 +57,6 @@ def get_exa_retriever() -> ExaSearchRetriever:
     if _retriever is not None:
         return _retriever
 
-    api_key = os.getenv("EXA_TOKEN")
-
     if not api_key:
         logger.error(
             "Environment variable EXA_TOKEN is not configured."
@@ -70,7 +70,7 @@ def get_exa_retriever() -> ExaSearchRetriever:
     )
 
     _retriever = ExaSearchRetriever(
-        api_key=api_key,
+        exa_api_key=EXA_TOKEN,
         k=EXA_RESULTS,
         text_contents=True,
     )
