@@ -6,6 +6,7 @@ from langchain.tools import tool
 
 from llm import get_llm
 from web_search.context import get_context
+from web_search.models import AgentContext
 
 
 logger = logging.getLogger(__name__)
@@ -15,11 +16,23 @@ logger = logging.getLogger(__name__)
 # WEB SEARCH TOOL
 # ==========================================================
 
+def _context_to_tool_text(
+    context: AgentContext,
+) -> str:
+    """
+    Convert AgentContext into
+    LLM-readable tool output.
+    """
 
-@tool
+    return context.context_text
+
+
+@tool(
+    response_format="content_and_artifact"
+)
 async def web_search(
     query: str
-) -> str:
+) -> tuple[str, dict[str, Any]]:
     """
     Search the web and semantic memory.
 
@@ -47,7 +60,10 @@ async def web_search(
             query,
         )
 
-        return context
+        return (
+            _context_to_tool_text(context),
+            {"sources": context.sources}
+        )
 
     except Exception:
         logger.exception(
