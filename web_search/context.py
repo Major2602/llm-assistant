@@ -5,8 +5,7 @@ from typing import Any
 from web_search.qdrant_store import (
     add_chunks,
     cleanup_old_chunks,
-    search,
-    ensure_payload_indexes
+    search
 )
 from web_search.exa import search_exa
 
@@ -42,17 +41,16 @@ async def init_web_search() -> None:
             return
 
         try:
-            logger.info("Initializing RAG subsystem.")
+            logger.info("Initializing web_search subsystem.")
 
-            await ensure_payload_indexes()
             await cleanup_old_chunks(days=30)
 
             _initialized = True
 
-            logger.info("RAG initialized successfully.")
+            logger.info("web_search initialized successfully.")
 
         except Exception:
-            logger.exception("Failed to initialize RAG.")
+            logger.exception("Failed to initialize web_search.")
             raise
 
 
