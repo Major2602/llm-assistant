@@ -249,7 +249,7 @@ async def add_chunks(
 async def search(
     query: str,
     limit: int = 5,
-    score_threshold: float = 0.70,
+    score_threshold: float = 0.60,
 ) -> list[dict]:
 
     logger.info(
