@@ -103,29 +103,24 @@ def _extract_text_from_chunk(
 
 
 def _extract_tool_name(
-    event: dict[str, Any],
-) -> str | None:
+    event: dict,
+) -> str:
     """
     Extract tool name from LangChain event.
     """
 
-    metadata = event.get(
-        "metadata",
-        {},
-    )
-
-
-    name = (
-        metadata.get(
+    return (
+        event.get("name")
+        or
+        event.get(
+            "metadata",
+            {}
+        ).get(
             "name"
         )
-        or event.get(
-            "name"
-        )
+        or
+        "unknown_tool"
     )
-
-
-    return name
 
 
 
