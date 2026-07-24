@@ -287,7 +287,7 @@ async def search(
         best_score = hits[0].score
 
         logger.info(
-            "Best similarity score: #.3f",
+            "Best similarity score: %.3f",
             best_score
         )
 
@@ -299,6 +299,18 @@ async def search(
                 score_threshold
             )
             return []
+
+        ############################################################## DELETE AFTER DEBUG ##########################################################
+        for i, point in enumerate(points, start=1):
+            logger.info(
+                "#%d score=%.3f query=%s title=%s url=%s",
+                i,
+                point.score,
+                point.payload.get("query"),
+                point.payload.get("title"),
+                point.payload.get("url"),
+            )
+        ############################################################## DELETE AFTER DEBUG ##########################################################
 
         await update_last_access(
             [
