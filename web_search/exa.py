@@ -57,7 +57,7 @@ def get_exa_retriever() -> ExaSearchRetriever:
     if _retriever is not None:
         return _retriever
 
-    if not api_key:
+    if not EXA_TOKEN:
         logger.error(
             "Environment variable EXA_TOKEN is not configured."
         )
