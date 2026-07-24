@@ -249,6 +249,13 @@ async def stream_agent_events(
                     },
                 )
 
+                yield UIEvent(
+                    type=UIEventType.SOURCE,
+                    metadata={
+                    "sources": sources,
+                    },
+                )
+
 
         logger.info(
             "Agent stream completed."
