@@ -301,7 +301,7 @@ async def search(
             return []
 
         ############################################################## DELETE AFTER DEBUG ##########################################################
-        for i, point in enumerate(points, start=1):
+        for i, point in enumerate(hits, start=1):
             logger.info(
                 "#%d score=%.3f query=%s title=%s url=%s",
                 i,
