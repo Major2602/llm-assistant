@@ -1,29 +1,88 @@
-from dataclasses import dataclass, field
-from typing import Any
+"""
+Web search domain models.
+
+Contains internal data contracts between:
+- retrieval layer;
+- agent layer;
+- UI layer.
+
+No business logic is allowed here.
+"""
+
+from __future__ import annotations
+
+from pydantic import BaseModel, Field
 
 
-@dataclass(slots=True)
-class Source:
+# ==========================================================
+# Source model
+# ==========================================================
 
-    title: str
 
-    url: str
+class Source(BaseModel):
+    """
+    External information source.
 
-    provider: str | None = None
+    Represents a document/page returned by:
+    - Exa;
+    - Qdrant semantic memory.
+    """
 
-    score: float | None = None
+    title: str = Field(
+        default="Untitled source",
+        description="Source title.",
+    )
 
-    metadata: dict[str, Any] = field(
-        default_factory=dict
+    url: str = Field(
+        default="",
+        description="Source URL.",
+    )
+
+    provider: str | None = Field(
+        default=None,
+        description="Source provider (exa, qdrant, etc.).",
+    )
+
+    score: float | None = Field(
+        default=None,
+        description="Semantic similarity score.",
+    )
+
+    published_date: str | None = Field(
+        default=None,
+        description="Publication date if available.",
+    )
+
+    author: str | None = Field(
+        default=None,
+        description="Author if available.",
     )
 
 
+# ==========================================================
+# Agent context
+# ==========================================================
 
-@dataclass(slots=True)
-class AgentContext:
 
-    context_text: str
+class AgentContext(BaseModel):
+    """
+    Context returned to the agent tool.
 
-    sources: list[Source] = field(
-        default_factory=list
+    Contains:
+
+    text:
+        formatted information for LLM reasoning.
+
+    sources:
+        metadata preserved for UI citations.
+    """
+
+    text: str = Field(
+        default="",
+        description="Context text provided to LLM.",
+    )
+
+    sources: list[Source] = Field(
+        default_factory=list,
+        description="Sources used to build context.",
     )
