@@ -2,12 +2,16 @@ import asyncio
 import logging
 from typing import Any
 
+from web_search.exa import search_exa
 from web_search.qdrant_store import (
     add_chunks,
     cleanup_old_chunks,
     search
 )
-from web_search.exa import search_exa
+from web_search.models import (
+    AgentContext,
+    Source
+)
 
 logger = logging.getLogger(__name__)
 
@@ -60,29 +64,78 @@ async def init_web_search() -> None:
 
 def _format_context(
     chunks: list[dict[str, Any]],
-) -> str:
+) -> AgentContext:
     """
-    Convert retrieved chunks into context for the LLM.
+    Convert chunks into LLM context
+    and preserve sources.
     """
 
-    result: list[str] = []
+    context_parts = []
 
-    for index, chunk in enumerate(chunks, start=1):
-        result.append(
-            f"""SOURCE {index}
+    sources = []
+
+
+    for index, chunk in enumerate(
+        chunks,
+        start=1,
+    ):
+
+
+        context_parts.append(
+            f"""
+[SOURCE {index}]
 
 Title:
 {chunk.get("title", "")}
 
 Text:
 {chunk.get("text", "")}
-
-URL:
-{chunk.get("url", "")}
 """
         )
 
-    return "\n\n".join(result)
+
+        sources.append(
+            Source(
+
+                title=(
+                    chunk.get(
+                        "title",
+                        "Untitled",
+                    )
+                ),
+
+                url=(
+                    chunk.get(
+                        "url",
+                        "",
+                    )
+                ),
+
+                provider=(
+                    chunk.get(
+                        "provider"
+                    )
+                ),
+
+                score=(
+                    chunk.get(
+                        "score"
+                    )
+                ),
+
+            )
+        )
+
+
+    return AgentContext(
+
+        context_text="\n\n".join(
+            context_parts
+        ),
+
+        sources=sources,
+
+    )
 
 
 # ==========================================================
@@ -91,7 +144,7 @@ URL:
 
 async def get_context(
     query: str,
-) -> str:
+) -> AgentContext:
     """
     Retrieve cache for a user query.
     """
