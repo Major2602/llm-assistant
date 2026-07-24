@@ -6,7 +6,7 @@ from rag.qdrant_store import (
     add_chunks,
     cleanup_old_chunks,
     search,
-    ensure_payload_index
+    ensure_payload_indexes
 )
 from rag.exa import search_exa
 
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 # ==========================================================
 
 TOP_K = 5
-SIMILARITY_THRESHOLD = 0.75
+SIMILARITY_THRESHOLD = 0.70
 
 # ==========================================================
 # Initialization
@@ -44,7 +44,7 @@ async def init_rag() -> None:
         try:
             logger.info("Initializing RAG subsystem.")
 
-            await ensure_payload_index()
+            await ensure_payload_indexes()
             await cleanup_old_chunks(days=30)
 
             _initialized = True
@@ -79,8 +79,8 @@ Title:
 Text:
 {chunk.get("text", "")}
 
-Source:
-{chunk.get("source", "")}
+URL:
+{chunk.get("url", "")}
 """
         )
 
@@ -92,48 +92,47 @@ Source:
 # ==========================================================
 
 async def get_context(
-    entity: str,
-    question: str,
+    query: str,
 ) -> str:
     """
-    Retrieve context for an entity and user question.
+    Retrieve cache for a user query.
     """
 
     await init_rag()
 
     logger.info(
-        "Searching RAG context. Entity='%s'",
-        entity,
+        "Searching web_memory. Query='%s'",
+        query,
     )
 
     try:
+        
         # -------------------------------------------------
-        # 1. Search existing knowledge
+        # 1. Search semantic cache
         # -------------------------------------------------
 
         chunks = await search(
-            question=question,
-            entity=entity,
+            query=query,
             limit=TOP_K,
             score_threshold=SIMILARITY_THRESHOLD,
         )
 
         if chunks:
             logger.info(
-                "Found %d cached chunks.",
+                "Semantic cache hit. Found %d semantic cache chunks.",
                 len(chunks),
             )
             return _format_context(chunks)
 
         logger.info(
-            "No cached chunks found. Searching Exa."
+            "Semantic cache miss. Searching Exa."
         )
 
         # -------------------------------------------------
-        # 2. Wikipedia fallback
+        # 2. Exa fallback
         # -------------------------------------------------
 
-        web_chunks = await search_exa(entity)
+        web_chunks = await search_exa(query)
 
         logger.info(
             "Loaded %d chunks from Exa.",
@@ -141,7 +140,7 @@ async def get_context(
         )
 
         # -------------------------------------------------
-        # 3. Store in Qdrant
+        # 3. Store cache in Qdrant
         # -------------------------------------------------
 
         await add_chunks(web_chunks)
@@ -151,28 +150,16 @@ async def get_context(
         )
 
         # -------------------------------------------------
-        # 4. Search again
+        # 4. Return fresh context
         # -------------------------------------------------
 
-        chunks = await search(
-            question=question,
-            entity=entity,
-            limit=TOP_K,
-            score_threshold=SIMILARITY_THRESHOLD,
+        return _format_context(
+            web_chunks[:TOP_K]
         )
-
-        if not chunks:
-            logger.warning(
-                "No chunks returned after indexing. "
-                "Using Exa chunks directly."
-            )
-            chunks = wikipedia_chunks[:TOP_K]
-
-        return _format_context(chunks)
 
     except Exception:
         logger.exception(
-            "Failed to build RAG context for entity '%s'.",
-            entity,
+            "Failed to build semantic cache for query '%s'.",
+            query,
         )
         raise
