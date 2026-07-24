@@ -7,7 +7,6 @@ from qdrant_client.models import (
     Distance,
     FieldCondition,
     Filter,
-    MatchValue,
     PointStruct,
     Range,
     VectorParams,
@@ -30,7 +29,7 @@ QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 
 COLLECTION_NAME = os.getenv(
     "QDRANT_COLLECTION",
-    "wikipedia",
+    "web_memory",
 )
 
 # ==========================================================
@@ -58,7 +57,7 @@ def get_qdrant() -> AsyncQdrantClient:
 # Payload Index
 # ==========================================================
 
-async def ensure_payload_index() -> None:
+async def ensure_payload_indexes() -> None:
 
     client = get_qdrant()
 
@@ -72,7 +71,13 @@ async def ensure_payload_index() -> None:
 
         await client.create_payload_index(
             collection_name=COLLECTION_NAME,
-            field_name="entity",
+            field_name="query",
+            field_schema="keyword",
+        )
+
+        await client.create_payload_index(
+            collection_name=COLLECTION_NAME,
+            field_name="provider",
             field_schema="keyword",
         )
 
@@ -118,7 +123,7 @@ async def ensure_collection(
                 ),
             )
 
-        await ensure_payload_index()
+        await ensure_payload_indexes()
 
         logger.info(
             "Qdrant collection '%s' is ready.",
@@ -145,7 +150,7 @@ async def add_chunks(
         return
 
     logger.info(
-        "Adding %d chunks into Qdrant.",
+        "Adding %d web memory chunks into Qdrant.",
         len(chunks),
     )
 
@@ -213,15 +218,14 @@ async def add_chunks(
 # ==========================================================
 
 async def search(
-    question: str,
-    entity: str,
+    query: str,
     limit: int = 5,
-    score_threshold: float = 0.75,
+    score_threshold: float = 0.70,
 ) -> list[dict]:
 
     logger.info(
-        "Searching entity='%s' limit=%d threshold=%.2f",
-        entity,
+        "Searching query='%s' limit=%d threshold=%.2f",
+        query,
         limit,
         score_threshold,
     )
@@ -231,7 +235,7 @@ async def search(
     try:
 
         query_vector = await embedder.embed_query(
-            question
+            query
         )
 
         await ensure_collection(
@@ -241,16 +245,6 @@ async def search(
         result = await get_qdrant().query_points(
             collection_name=COLLECTION_NAME,
             query=query_vector,
-            query_filter=Filter(
-                must=[
-                    FieldCondition(
-                        key="entity",
-                        match=MatchValue(
-                            value=entity,
-                        ),
-                    )
-                ]
-            ),
             limit=limit,
             score_threshold=score_threshold,
         )
@@ -361,7 +355,7 @@ async def cleanup_old_chunks(
         )
 
         logger.info(
-            "Removing chunks older than %d days.",
+            "Removing inactive web memory chunks older than %d days.",
             days,
         )
 
