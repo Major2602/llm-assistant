@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 # ==========================================================
 
 TOP_K = 5
-SIMILARITY_THRESHOLD = 0.70
+SIMILARITY_THRESHOLD = 0.60
 
 # ==========================================================
 # Initialization
