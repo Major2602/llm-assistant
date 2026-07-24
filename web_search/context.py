@@ -2,13 +2,13 @@ import asyncio
 import logging
 from typing import Any
 
-from rag.qdrant_store import (
+from web_search.qdrant_store import (
     add_chunks,
     cleanup_old_chunks,
     search,
     ensure_payload_indexes
 )
-from rag.exa import search_exa
+from web_search.exa import search_exa
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,7 @@ _initialized = False
 _init_lock = asyncio.Lock()
 
 
-async def init_rag() -> None:
+async def init_web_search() -> None:
     """
     Initialize the RAG subsystem once.
     """
