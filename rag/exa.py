@@ -1,5 +1,5 @@
-import os
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -7,10 +7,23 @@ from typing import Any
 from langchain_exa import ExaSearchRetriever
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
+
 logger = logging.getLogger(__name__)
+
+
+# ==========================================================
+# Configuration
+# ==========================================================
 
 CHUNK_SIZE = 700
 CHUNK_OVERLAP = 100
+
+EXA_RESULTS = 5
+
+
+# ==========================================================
+# Text splitter
+# ==========================================================
 
 _splitter = RecursiveCharacterTextSplitter(
     chunk_size=CHUNK_SIZE,
@@ -24,21 +37,73 @@ _splitter = RecursiveCharacterTextSplitter(
     ],
 )
 
-_retriever = ExaSearchRetriever(
-    api_key=os.getenv("EXA_TOKEN"),
-    k=5,
-    text_contents=True,
-)
+
+# ==========================================================
+# Exa client
+# ==========================================================
+
+_retriever: ExaSearchRetriever | None = None
 
 
-async def _search(query: str):
+def get_exa_retriever() -> ExaSearchRetriever:
     """
-    Execute Exa search.
+    Lazily initialize Exa retriever.
     """
 
-    logger.info("Searching Exa: '%s'", query)
+    global _retriever
 
-    documents = await _retriever.ainvoke(query)
+    if _retriever is not None:
+        return _retriever
+
+    api_key = os.getenv("EXA_TOKEN")
+
+    if not api_key:
+        logger.error(
+            "Environment variable EXA_TOKEN is not configured."
+        )
+        raise RuntimeError(
+            "Environment variable EXA_TOKEN is not configured."
+        )
+
+    logger.info(
+        "Initializing ExaSearchRetriever."
+    )
+
+    _retriever = ExaSearchRetriever(
+        api_key=api_key,
+        k=EXA_RESULTS,
+        text_contents=True,
+    )
+
+    logger.info(
+        "ExaSearchRetriever initialized successfully."
+    )
+
+    return _retriever
+
+
+# ==========================================================
+# Search
+# ==========================================================
+
+
+async def _search(
+    query: str,
+):
+    """
+    Execute Exa web search.
+    """
+
+    logger.info(
+        "Searching Exa for query='%s'.",
+        query,
+    )
+
+    retriever = get_exa_retriever()
+
+    documents = await retriever.ainvoke(
+        query
+    )
 
     logger.info(
         "Exa returned %d documents.",
@@ -48,83 +113,205 @@ async def _search(query: str):
     return documents
 
 
+# ==========================================================
+# Processing
+# ==========================================================
+
+
+def _normalize_document(
+    document: Any,
+    query: str,
+) -> dict[str, Any] | None:
+    """
+    Convert Exa document into internal format.
+    """
+
+    metadata = (
+        document.metadata
+        if hasattr(document, "metadata")
+        else {}
+    )
+
+    text = (
+        getattr(
+            document,
+            "page_content",
+            "",
+        )
+        or ""
+    ).strip()
+
+
+    if not text:
+        logger.debug(
+            "Skipping empty Exa document."
+        )
+        return None
+
+
+    return {
+        "query": query,
+
+        "title": (
+            metadata.get("title")
+            or "Untitled"
+        ),
+
+        "url": (
+            metadata.get("url")
+            or ""
+        ),
+
+        "text": text,
+
+        "provider": "exa",
+
+        "published_date": (
+            metadata.get("published_date")
+        ),
+
+        "author": (
+            metadata.get("author")
+        ),
+    }
+
+
 def _chunk_documents(
-    documents,
-) -> list[dict[str, str | int]]:
+    documents: list[Any],
+    query: str,
+) -> list[dict[str, Any]]:
     """
-    Convert Exa documents into Qdrant chunks.
+    Split Exa documents into Qdrant chunks.
     """
 
-    now = datetime.now(timezone.utc).timestamp()
+    now = int(
+        datetime.now(
+            timezone.utc
+        ).timestamp()
+    )
 
-    result: list[dict[str, str | int]] = []
+
+    chunks: list[dict[str, Any]] = []
+
 
     for document in documents:
 
-        title = (
-            document.metadata.get("title")
-            or "Untitled"
+        normalized = _normalize_document(
+            document,
+            query,
         )
 
-        source = (
-            document.metadata.get("url")
-            or ""
-        )
-
-        text = document.page_content.strip()
-
-        if not text:
+        if normalized is None:
             continue
 
-        chunks = _splitter.split_text(text)
 
-        for index, chunk in enumerate(chunks):
+        text_chunks = _splitter.split_text(
+            normalized["text"]
+        )
 
-            result.append(
+
+        for index, chunk in enumerate(text_chunks):
+
+            chunks.append(
                 {
-                    "id": str(uuid.uuid4()),
-                    "entity": title,
-                    "chunk_index": index,
+                    "id": str(
+                        uuid.uuid4()
+                    ),
+
+                    "query": (
+                        normalized["query"]
+                    ),
+
+                    "title": (
+                        normalized["title"]
+                    ),
+
+                    "url": (
+                        normalized["url"]
+                    ),
+
                     "text": chunk,
-                    "title": title,
-                    "language": "unknown",
-                    "source": source,
+
+                    "provider": (
+                        normalized["provider"]
+                    ),
+
+                    "chunk_index": index,
+
+                    "published_date": (
+                        normalized["published_date"]
+                    ),
+
+                    "author": (
+                        normalized["author"]
+                    ),
+
                     "created_at": now,
+
                     "last_access": now,
                 }
             )
 
+
     logger.info(
-        "Prepared %d chunks.",
-        len(result),
+        "Prepared %d chunks from Exa results.",
+        len(chunks),
     )
 
-    return result
+    return chunks
+
+
+# ==========================================================
+# Public API
+# ==========================================================
 
 
 async def search_exa(
     query: str,
-) -> list[dict[str, str | int]]:
+) -> list[dict[str, Any]]:
     """
-    Search Exa and prepare chunks for indexing.
+    Search web using Exa and prepare chunks
+    for semantic storage.
     """
 
     logger.info(
-        "Searching web for '%s'.",
+        "Starting Exa web search for '%s'.",
         query,
     )
 
-    documents = await _search(query)
+
+    documents = await _search(
+        query
+    )
+
 
     if not documents:
 
         logger.warning(
-            "No Exa results for '%s'.",
+            "Exa returned no results for '%s'.",
             query,
         )
 
         raise ValueError(
-            f"No search results for '{query}'."
+            f"No Exa search results for '{query}'."
         )
 
-    return _chunk_documents(documents)
+
+    chunks = _chunk_documents(
+        documents,
+        query,
+    )
+
+
+    if not chunks:
+
+        logger.warning(
+            "Exa returned documents but no usable chunks."
+        )
+
+        raise ValueError(
+            "Exa returned no usable text chunks."
+        )
+
+
+    return chunks
