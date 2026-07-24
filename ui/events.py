@@ -34,7 +34,7 @@ class UIEvent:
 
     type: UIEventType
 
-    content: str | None = None
+    content: Any | None = None
 
     metadata: dict[str, Any] = field(
         default_factory=dict
