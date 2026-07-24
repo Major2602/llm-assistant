@@ -20,7 +20,7 @@ REQUEST_TIMEOUT = 60.0
 MODEL_EMBEDDINGS = "@cf/qwen/qwen3-embedding-0.6b"
 
 EMBEDDING_INSTRUCTION = (
-    "Given a user question, retrieve relevant Wikipedia passages."
+    "Given a search query, retrieve relevant documents."
 )
 
 CF_ACCOUNT_ID = os.getenv("CF_ACCOUNT_ID")
