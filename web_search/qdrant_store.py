@@ -84,9 +84,9 @@ async def ensure_payload_indexes() -> None:
     client = get_qdrant()
 
     indexes = {
-        "last_access": "integer",
-        "query": "keyword",
-        "provider": "keyword",
+        "last_access": PayloadSchemaType.INTEGER,
+        "query": PayloadSchemaType.KEYWORD,
+        "provider": PayloadSchemaType.KEYWORD,
     }
 
     try:
