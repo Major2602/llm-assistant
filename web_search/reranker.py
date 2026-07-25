@@ -180,7 +180,7 @@ class CloudflareReranker:
                 API_URL,
                 json={
                     "query": query,
-                    "documents": documents,
+                    "contexts": documents,
                 },
             )
 
