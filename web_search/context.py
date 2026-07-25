@@ -47,7 +47,7 @@ from web_search.filter import (
 )
 
 from web_search.reranker import (
-    rerank_chunks,
+    get_reranker,
 )
 
 from web_search.models import (
@@ -368,7 +368,9 @@ async def get_context(
         # 4-5 Embedding + reranking
         # ==================================================
 
-        ranked_chunks = await rerank_chunks(
+        reranker = get_reranker()
+
+        ranked_chunks = await reranker.rerank(
             query=query,
             chunks=candidates,
         )
