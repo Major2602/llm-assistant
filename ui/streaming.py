@@ -191,7 +191,7 @@ async def stream_ui_events(
 
                 if token:
 
-                    yield TokenEvent(
+                    yield TokenEvent.create(
                         text=token,
                     )
 
@@ -203,7 +203,7 @@ async def stream_ui_events(
 
             if event_name == "on_tool_start":
 
-                yield ToolStartEvent(
+                yield ToolStartEvent.create(
                     name=_tool_name(event),
                 )
 
@@ -217,7 +217,7 @@ async def stream_ui_events(
 
                 tool = _tool_name(event)
 
-                yield ToolEndEvent(
+                yield ToolEndEvent.create(
                     name=tool,
                 )
 
@@ -238,7 +238,7 @@ async def stream_ui_events(
                         len(sources),
                     )
 
-                    yield SourceEvent(
+                    yield SourceEvent.create(
                         sources=sources,
                     )
 
@@ -248,7 +248,7 @@ async def stream_ui_events(
             "UI event stream completed."
         )
 
-        yield DoneEvent()
+        yield DoneEvent.create()
 
     except Exception as exc:
 
@@ -256,6 +256,6 @@ async def stream_ui_events(
             "UI event stream failed."
         )
 
-        yield ErrorEvent(
+        yield ErrorEvent.create(
             message=str(exc),
         )
