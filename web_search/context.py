@@ -83,9 +83,11 @@ logger = logging.getLogger(__name__)
 
 CACHE_TOP_K = 5
 
-FINAL_CONTEXT_K = 8
+RERANK_OUTPUT_K = 8
 
-SIMILARITY_THRESHOLD = 0.70
+SIMILARITY_THRESHOLD = 0.80
+
+MAX_RERANK_CHUNKS = 50
 
 
 
@@ -280,7 +282,14 @@ async def get_context(
     Build context for agent.
     """
 
+    query = query.strip()
 
+    if not query:
+     
+     raise ValueError(
+      "Query cannot be empty."
+     )
+ 
     await init_web_search()
 
 
@@ -400,6 +409,13 @@ async def get_context(
             len(chunks),
         )
 
+        chunks = chunks[:MAX_RERANK_CHUNKS]
+
+        logger.info(
+            "Chunks sent to reranker=%d",
+            len(chunks)
+        )
+
 
 
         # ==================================================
@@ -415,7 +431,7 @@ async def get_context(
 
             chunks=chunks,
 
-            top_k=FINAL_CONTEXT_K,
+            top_k=RERANK_OUTPUT_K,
 
         )
 
