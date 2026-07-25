@@ -16,24 +16,30 @@ Semantic cache (Qdrant)
       Exa
         |
         v
-    Cheap filtering
+      Filtering
         |
         v
-    Embeddings
+      Chunking
         |
         v
-    Reranking
+      Reranking
         |
         v
-    Qdrant memory
+      Qdrant memory
+        |
+        v
+      AgentContext
+
 
 This module does not know about:
-- Chainlit
-- UI
-- LangGraph internals
+- Chainlit;
+- UI;
+- LangGraph internals.
 """
 
+
 from __future__ import annotations
+
 
 import asyncio
 import logging
@@ -46,13 +52,12 @@ from web_search.filter import (
     filter_documents,
 )
 
-from web_search.reranker import (
-    get_reranker,
+from web_search.chunker import (
+    chunk_documents,
 )
 
-from web_search.models import (
-    AgentContext,
-    Source,
+from web_search.reranker import (
+    get_reranker,
 )
 
 from web_search.qdrant_store import (
@@ -61,8 +66,14 @@ from web_search.qdrant_store import (
     search,
 )
 
+from web_search.models import (
+    AgentContext,
+    Source,
+)
+
 
 logger = logging.getLogger(__name__)
+
 
 
 # ==========================================================
@@ -75,10 +86,6 @@ CACHE_TOP_K = 5
 FINAL_CONTEXT_K = 8
 
 SIMILARITY_THRESHOLD = 0.70
-
-
-# количество кандидатов после дешевого фильтра
-RERANK_INPUT_K = 30
 
 
 
@@ -134,7 +141,7 @@ async def init_web_search() -> None:
         except Exception:
 
             logger.exception(
-                "Failed to initialize web_search."
+                "Failed initializing web_search."
             )
 
             raise
@@ -150,10 +157,11 @@ def _format_context(
     chunks: list[dict[str, Any]],
 ) -> str:
     """
-    Format selected chunks for LLM.
+    Prepare context text for LLM.
     """
 
-    result: list[str] = []
+
+    sections = []
 
 
     for index, chunk in enumerate(
@@ -161,20 +169,22 @@ def _format_context(
         start=1,
     ):
 
-        result.append(
+        sections.append(
             f"""
 SOURCE [{index}]
 
 Title:
 {chunk.get("title", "")}
 
-Text:
+Content:
 {chunk.get("text", "")}
 """
         )
 
 
-    return "\n\n".join(result)
+    return "\n\n".join(
+        sections
+    )
 
 
 
@@ -187,10 +197,11 @@ def _extract_sources(
     chunks: list[dict[str, Any]],
 ) -> list[Source]:
     """
-    Extract unique sources.
+    Extract unique citation sources.
     """
 
-    sources: list[Source] = []
+
+    result: list[Source] = []
 
     seen_urls: set[str] = set()
 
@@ -211,16 +222,17 @@ def _extract_sources(
             continue
 
 
-        seen_urls.add(url)
+        seen_urls.add(
+            url
+        )
 
 
-        sources.append(
+        result.append(
+
             Source(
 
                 title=(
-                    chunk.get(
-                        "title"
-                    )
+                    chunk.get("title")
                     or "Untitled source"
                 ),
 
@@ -230,8 +242,13 @@ def _extract_sources(
                     "provider"
                 ),
 
-                score=chunk.get(
-                    "score"
+                score=(
+                    chunk.get(
+                        "rerank_score"
+                    )
+                    or chunk.get(
+                        "score"
+                    )
                 ),
 
                 published_date=chunk.get(
@@ -241,11 +258,13 @@ def _extract_sources(
                 author=chunk.get(
                     "author"
                 ),
+
             )
+
         )
 
 
-    return sources
+    return result
 
 
 
@@ -259,16 +278,6 @@ async def get_context(
 ) -> AgentContext:
     """
     Build context for agent.
-
-    Pipeline:
-
-    1. Semantic cache lookup
-    2. Exa retrieval
-    3. Cheap filtering
-    4. Embedding generation
-    5. Reranking
-    6. Qdrant persistence
-    7. Context preparation
     """
 
 
@@ -288,30 +297,35 @@ async def get_context(
         # 1. Semantic cache
         # ==================================================
 
-        cached_chunks = await search(
+        cached = await search(
+
             query=query,
+
             limit=CACHE_TOP_K,
+
             score_threshold=SIMILARITY_THRESHOLD,
+
         )
 
 
-        if cached_chunks:
+        if cached:
 
             logger.info(
-                "Semantic cache hit. Chunks=%d",
-                len(cached_chunks),
+                "Semantic cache hit. chunks=%d",
+                len(cached),
             )
 
 
             return AgentContext(
 
                 text=_format_context(
-                    cached_chunks
+                    cached
                 ),
 
                 sources=_extract_sources(
-                    cached_chunks
+                    cached
                 ),
+
             )
 
 
@@ -323,7 +337,7 @@ async def get_context(
 
 
         # ==================================================
-        # 2. Exa search
+        # 2. Exa retrieval
         # ==================================================
 
         documents = await search_exa(
@@ -332,7 +346,7 @@ async def get_context(
 
 
         logger.info(
-            "Exa documents received=%d",
+            "Received %d Exa documents.",
             len(documents),
         )
 
@@ -342,81 +356,114 @@ async def get_context(
         # 3. Cheap filtering
         # ==================================================
 
-        candidates = filter_documents(
+        filtered_documents = filter_documents(
+
             documents,
-            query=query,
-            limit=RERANK_INPUT_K,
+
+            query,
+
         )
+
+
+        if not filtered_documents:
+
+            raise RuntimeError(
+                "No documents after filtering."
+            )
 
 
         logger.info(
-            "After filtering=%d candidates",
-            len(candidates),
+            "Filtered documents=%d",
+            len(filtered_documents),
         )
-
-
-
-        if not candidates:
-
-            raise RuntimeError(
-                "No usable documents after filtering."
-            )
 
 
 
         # ==================================================
-        # 4-5 Embedding + reranking
+        # 4. Chunking
+        # ==================================================
+
+        chunks = chunk_documents(
+            filtered_documents
+        )
+
+
+        if not chunks:
+
+            raise RuntimeError(
+                "No chunks generated."
+            )
+
+
+        logger.info(
+            "Generated chunks=%d",
+            len(chunks),
+        )
+
+
+
+        # ==================================================
+        # 5. Reranking
         # ==================================================
 
         reranker = get_reranker()
 
+
         ranked_chunks = await reranker.rerank(
+
             query=query,
-            chunks=candidates,
+
+            chunks=chunks,
+
+            top_k=FINAL_CONTEXT_K,
+
         )
 
 
-        selected_chunks = ranked_chunks[
-            :FINAL_CONTEXT_K
-        ]
+        if not ranked_chunks:
+
+            raise RuntimeError(
+                "Reranker returned no chunks."
+            )
 
 
         logger.info(
-            "Reranked chunks selected=%d",
-            len(selected_chunks),
+            "Selected ranked chunks=%d",
+            len(ranked_chunks),
         )
 
 
 
         # ==================================================
-        # 6. Store only final memory
+        # 6. Persistent semantic memory
         # ==================================================
 
         await add_chunks(
-            selected_chunks
+            ranked_chunks
         )
 
 
         logger.info(
             "Stored %d chunks into Qdrant.",
-            len(selected_chunks),
+            len(ranked_chunks),
         )
 
 
 
         # ==================================================
-        # 7. Return context
+        # 7. Agent context
         # ==================================================
 
         return AgentContext(
 
             text=_format_context(
-                selected_chunks
+                ranked_chunks
             ),
 
             sources=_extract_sources(
-                selected_chunks
+                ranked_chunks
             ),
+
         )
 
 
