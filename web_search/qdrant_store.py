@@ -1,359 +1,475 @@
+"""
+Qdrant storage layer.
+
+Pipeline position:
+
+Exa
+ ↓
+filter.py
+ ↓
+chunker.py
+ ↓
+cloudflare_embeddings.py
+ ↓
+reranker.py
+ ↓
+qdrant_store.py
+
+
+Responsibilities:
+- semantic cache lookup;
+- embedding generation for final chunks;
+- vector storage;
+- memory cleanup.
+
+This module does NOT:
+- call Exa;
+- split documents;
+- filter chunks;
+- rerank chunks.
+"""
+
+from __future__ import annotations
+
 import logging
 import os
-from typing import Any
+
 from datetime import datetime, timedelta, timezone
+from typing import Any
+
 
 from qdrant_client import AsyncQdrantClient
+
 from qdrant_client.models import (
     Distance,
     FieldCondition,
     Filter,
+    PayloadSchemaType,
     PointStruct,
     Range,
     VectorParams,
-    PayloadSchemaType
 )
 
-from web_search.cloudflare_embeddings import get_embedding_model
+
+from web_search.cloudflare_embeddings import (
+    get_embedding_model,
+)
+
 
 logger = logging.getLogger(__name__)
+
+
 
 # ==========================================================
 # Configuration
 # ==========================================================
 
-QDRANT_URL = os.getenv("QDRANT_URL")
+
+QDRANT_URL = os.getenv(
+    "QDRANT_URL"
+)
+
 
 if not QDRANT_URL:
-    raise RuntimeError("Environment variable QDRANT_URL is not configured.")
+    raise RuntimeError(
+        "Environment variable QDRANT_URL is not configured."
+    )
 
-QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
+
+QDRANT_API_KEY = os.getenv(
+    "QDRANT_API_KEY"
+)
+
 
 COLLECTION_NAME = os.getenv(
     "QDRANT_COLLECTION",
     "web_memory",
 )
 
+
+
 # ==========================================================
 # Client
 # ==========================================================
 
+
 _client: AsyncQdrantClient | None = None
 
 
+
 def get_qdrant() -> AsyncQdrantClient:
+    """
+    Return singleton Qdrant client.
+    """
+
     global _client
 
+
     if _client is None:
-        logger.info("Initializing AsyncQdrantClient.")
+
+        logger.info(
+            "Initializing AsyncQdrantClient."
+        )
+
 
         _client = AsyncQdrantClient(
             url=QDRANT_URL,
             api_key=QDRANT_API_KEY,
         )
 
+
     return _client
-    
+
+
 
 # ==========================================================
-# Payload Index
+# Collection management
 # ==========================================================
+
+
+async def collection_exists() -> bool:
+    """
+    Check collection existence.
+    """
+
+    return await get_qdrant().collection_exists(
+        COLLECTION_NAME
+    )
+
+
+
+async def ensure_collection(
+    vector_size: int,
+) -> None:
+    """
+    Create collection if missing.
+    """
+
+
+    client = get_qdrant()
+
+
+    exists = await client.collection_exists(
+        COLLECTION_NAME
+    )
+
+
+    if not exists:
+
+        logger.info(
+            "Creating Qdrant collection '%s'.",
+            COLLECTION_NAME,
+        )
+
+
+        await client.create_collection(
+            collection_name=COLLECTION_NAME,
+
+            vectors_config=VectorParams(
+                size=vector_size,
+                distance=Distance.COSINE,
+            ),
+        )
+
+
+    await ensure_payload_indexes()
+
+
+
+# ==========================================================
+# Payload indexes
+# ==========================================================
+
 
 async def _payload_index_exists(
     field_name: str,
 ) -> bool:
-    """
-    Check whether payload index already exists.
-    """
 
     collection = await get_qdrant().get_collection(
         COLLECTION_NAME
     )
 
-    payload_schema = collection.payload_schema or {}
 
-    return field_name in payload_schema
+    schema = (
+        collection.payload_schema
+        or {}
+    )
+
+
+    return field_name in schema
 
 
 
 async def ensure_payload_indexes() -> None:
     """
-    Create payload indexes if they do not exist.
+    Ensure searchable payload fields.
     """
 
-    client = get_qdrant()
 
     indexes = {
-        "last_access": PayloadSchemaType.INTEGER,
-        "query": PayloadSchemaType.KEYWORD,
-        "provider": PayloadSchemaType.KEYWORD,
+
+        "last_access":
+            PayloadSchemaType.INTEGER,
+
+        "query":
+            PayloadSchemaType.KEYWORD,
+
+        "provider":
+            PayloadSchemaType.KEYWORD,
+
+        "url":
+            PayloadSchemaType.KEYWORD,
+
     }
 
-    try:
 
-        for field_name, field_schema, in indexes.items():
+    for field, schema in indexes.items():
 
-            if await _payload_index_exists(field_name):
-                logger.debug(
-                    "Payload index '%s' already exists",
-                    field_name,
-                )
-                continue
+        if await _payload_index_exists(
+            field
+        ):
+            continue
 
-            logger.info(
-                "Creating payload index '%s'.",
-                field_name,
-            )
-
-            await client.create_payload_index(
-                collection_name=COLLECTION_NAME,
-                field_name=field_name,
-                field_schema=field_schema,
-            )
 
         logger.info(
-            "Payload indexes are ready."
+            "Creating payload index '%s'.",
+            field,
         )
 
-    except Exception:
-        logger.exception(
-            "Failed creating payload indexes."
-        )
-        raise
 
-
-# ==========================================================
-# Collection
-# ==========================================================
-
-async def ensure_collection(
-    vector_size: int,
-) -> None:
-
-    client = get_qdrant()
-
-    try:
-        
-        exists = await client.collection_exists(
-            COLLECTION_NAME
+        await get_qdrant().create_payload_index(
+            collection_name=COLLECTION_NAME,
+            field_name=field,
+            field_schema=schema,
         )
 
-        if not exists:
-
-            logger.info(
-                "Creating Qdrant collection '%s'.",
-                COLLECTION_NAME,
-            )
-
-            await client.create_collection(
-                collection_name=COLLECTION_NAME,
-                vectors_config=VectorParams(
-                    size=vector_size,
-                    distance=Distance.COSINE,
-                ),
-            )
-
-        await ensure_payload_indexes()
-
-        logger.info(
-            "Qdrant collection '%s' is ready.",
-            COLLECTION_NAME,
-        )
-
-    except Exception:
-        logger.exception(
-            "Failed ensuring collection '%s'.",
-            COLLECTION_NAME,
-        )
-        raise
 
 
 # ==========================================================
 # Insert
 # ==========================================================
 
+
 async def add_chunks(
     chunks: list[dict[str, Any]],
 ) -> None:
+    """
+    Store final reranked chunks.
+
+    Expected input:
+        5-10 chunks after reranker.py
+    """
+
 
     if not chunks:
+
+        logger.info(
+            "No chunks provided for storage."
+        )
+
         return
 
+
+
     logger.info(
-        "Adding %d web memory chunks into Qdrant.",
+        "Embedding and storing %d final chunks.",
         len(chunks),
     )
 
+
     embedder = get_embedding_model()
 
+
     texts = [
-        chunk["text"]
+
+        chunk.get(
+            "text",
+            "",
+        )
+
         for chunk in chunks
+
     ]
 
-    try:
 
-        vectors = await embedder.embed_documents(
-            texts
+    vectors = await embedder.embed_documents(
+        texts
+    )
+
+
+    if len(vectors) != len(chunks):
+
+        raise RuntimeError(
+            "Embedding count does not match chunk count."
         )
 
-        if not vectors:
-            raise RuntimeError(
-                "Embedding model returned no vectors."
-            )
 
-        if len(vectors) != len(chunks):
-            raise RuntimeError(
-                "Embedding count does not match chunk count."
-            )
+    await ensure_collection(
+        len(vectors[0])
+    )
 
-        await ensure_collection(
-            len(vectors[0])
-        )
 
-        points = [
+
+    points = []
+
+
+    now = int(
+        datetime.now(
+            timezone.utc
+        ).timestamp()
+    )
+
+
+    for chunk, vector in zip(
+        chunks,
+        vectors,
+    ):
+
+        payload = {
+
+            **chunk,
+
+            "created_at":
+                chunk.get(
+                    "created_at",
+                    now,
+                ),
+
+            "last_access":
+                now,
+
+        }
+
+
+        points.append(
 
             PointStruct(
+
                 id=chunk["id"],
+
                 vector=vector,
-                payload=chunk,
+
+                payload=payload,
+
             )
 
-            for chunk, vector in zip(
-                chunks,
-                vectors,
-            )
-
-        ]
-
-        await get_qdrant().upsert(
-            collection_name=COLLECTION_NAME,
-            points=points,
         )
 
-        logger.info(
-            "Inserted %d chunks.",
-            len(points),
-        )
 
-    except Exception:
-        logger.exception(
-            "Failed inserting chunks into Qdrant."
-        )
-        raise
+    await get_qdrant().upsert(
+        collection_name=COLLECTION_NAME,
+        points=points,
+    )
+
+
+    logger.info(
+        "Inserted %d chunks into Qdrant.",
+        len(points),
+    )
+
 
 
 # ==========================================================
-# Search
+# Semantic search
 # ==========================================================
+
 
 async def search(
     query: str,
     limit: int = 5,
-    score_threshold: float = 0.60,
-) -> list[dict]:
+    score_threshold: float = 0.70,
+) -> list[dict[str, Any]]:
+    """
+    Semantic cache lookup.
+    """
 
-    logger.info(
-        "Searching query='%s' limit=%d threshold=%.2f",
-        query,
-        limit,
-        score_threshold,
-    )
+
+    if not await collection_exists():
+
+        logger.info(
+            "Qdrant collection does not exist."
+        )
+
+        return []
+
+
 
     embedder = get_embedding_model()
 
-    try:
 
-        query_vector = await embedder.embed_query(
-            query
-        )
+    query_vector = await embedder.embed_query(
+        query
+    )
 
-        await ensure_collection(
-            len(query_vector)
-        )
 
-        result = await get_qdrant().query_points(
-            collection_name=COLLECTION_NAME,
-            query=query_vector,
-            limit=limit,
-            with_payload=True
-        )
+    result = await get_qdrant().query_points(
 
-        hits = result.points
+        collection_name=COLLECTION_NAME,
 
-        if not hits:
-            
-            logger.info("No chunks found.")
-            return []
+        query=query_vector,
 
-        best_score = hits[0].score
+        limit=limit,
 
-        logger.info(
-            "Best similarity score: %.3f",
-            best_score
-        )
+        with_payload=True,
 
-        if best_score < score_threshold:
-            
-            logger.info(
-                "Semantic cache miss. Best score %.3f < %.2f",
-                best_score,
-                score_threshold
-            )
-            return []
+    )
 
-        ############################################################## DELETE AFTER DEBUG ##########################################################
-        for i, point in enumerate(hits, start=1):
-            logger.info(
-                "#%d score=%.3f query=%s title=%s url=%s",
-                i,
-                point.score,
-                point.payload.get("query"),
-                point.payload.get("title"),
-                point.payload.get("url"),
-            )
-        ############################################################## DELETE AFTER DEBUG ##########################################################
 
-        await update_last_access(
-            [
-                point.id
-                for point in hits
-            ]
-        )
+    hits = result.points
+
+
+    if not hits:
+
+        return []
+
+
+
+    if hits[0].score < score_threshold:
 
         logger.info(
-            "Found %d chunks.",
-            len(hits),
+            "Cache miss. Score %.3f",
+            hits[0].score,
         )
 
-        return [
+        return []
 
-            {
-                **point.payload,
-                "score": point.score,
-            }
 
+
+    await update_last_access(
+        [
+            point.id
             for point in hits
-
         ]
+    )
 
-    except Exception:
-        logger.exception(
-            "Qdrant search failed."
-        )
-        raise
+
+
+    return [
+
+        {
+            **point.payload,
+            "score": point.score,
+        }
+
+        for point in hits
+
+    ]
+
 
 
 # ==========================================================
-# Update access
+# Access update
 # ==========================================================
+
 
 async def update_last_access(
     ids: list[str],
 ) -> None:
 
+
     if not ids:
         return
+
 
     timestamp = int(
         datetime.now(
@@ -361,82 +477,82 @@ async def update_last_access(
         ).timestamp()
     )
 
-    try:
 
-        await get_qdrant().set_payload(
-            collection_name=COLLECTION_NAME,
-            payload={
-                "last_access": timestamp
-            },
-            points=ids,
-        )
+    await get_qdrant().set_payload(
 
-        logger.debug(
-            "Updated last_access for %d chunks.",
-            len(ids),
-        )
+        collection_name=COLLECTION_NAME,
 
-    except Exception:
-        logger.exception(
-            "Failed updating last_access."
-        )
-        raise
+        payload={
+            "last_access": timestamp
+        },
+
+        points=ids,
+
+    )
+
 
 
 # ==========================================================
 # Cleanup
 # ==========================================================
 
+
 async def cleanup_old_chunks(
     days: int = 30,
 ) -> None:
+    """
+    Remove unused memory.
+    """
 
-    client = get_qdrant()
 
-    try:
-        
-        if not await client.collection_exists(
-            COLLECTION_NAME
-        ):
-            logger.info(
-                "Qdrant collection '%s' does not exist. Skip cleanup.",
-                COLLECTION_NAME,
+    if not await collection_exists():
+
+        return
+
+
+
+    cutoff = int(
+
+        (
+            datetime.now(
+                timezone.utc
             )
-            return
-            
-        cutoff = int(
-            (
-                datetime.now(timezone.utc)
-                - timedelta(days=days)
-            ).timestamp()
-        )
+            -
+            timedelta(
+                days=days
+            )
 
-        logger.info(
-            "Removing inactive web memory chunks older than %d days.",
-            days,
-        )
+        ).timestamp()
+
+    )
 
 
-        await client.delete(
-            collection_name=COLLECTION_NAME,
-            points_selector=Filter(
-                must=[
-                    FieldCondition(
-                        key="last_access",
-                        range=Range(
-                            lt=cutoff,
-                        ),
-                    )
-                ]
-            ),
-        )
+    await get_qdrant().delete(
 
-        logger.info(
-            "Cleanup finished."
-        )
+        collection_name=COLLECTION_NAME,
 
-    except Exception:
-        logger.exception(
-            "Failed cleaning old chunks."
-        )
-        raise
+        points_selector=Filter(
+
+            must=[
+
+                FieldCondition(
+
+                    key="last_access",
+
+                    range=Range(
+                        lt=cutoff
+                    ),
+
+                )
+
+            ]
+
+        ),
+
+    )
+
+
+    logger.info(
+        "Removed chunks older than %d days.",
+        days,
+    )
