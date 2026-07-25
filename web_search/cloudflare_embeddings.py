@@ -104,14 +104,14 @@ class CloudflareEmbeddings:
 
             response.raise_for_status()
 
-            ####################################################### DEBUG ##################################################################
-            except httpx.HTTPStatusError as e:
-                logger.error(
-                "Cloudflare response: %s",
-                e.response.text,
-                )
-                raise
-            ####################################################### DEBUG ###################################################################
+        ####################################################### DEBUG ##################################################################
+        except httpx.HTTPStatusError as e:
+            logger.error(
+            "Cloudflare response: %s",
+            e.response.text,
+            )
+            raise
+        ####################################################### DEBUG ###################################################################
 
             payload = response.json()
 
