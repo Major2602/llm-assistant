@@ -1,11 +1,27 @@
+"""
+Exa search integration layer.
+
+Responsibilities:
+- execute Exa web search;
+- normalize Exa documents;
+- return clean documents for downstream processing.
+
+This module does not know about:
+- chunking;
+- filtering;
+- embeddings;
+- reranking;
+- Qdrant;
+- LLM context formatting.
+"""
+
+from __future__ import annotations
+
 import logging
 import os
-import uuid
-from datetime import datetime, timezone
 from typing import Any
 
 from langchain_exa import ExaSearchRetriever
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 
 logger = logging.getLogger(__name__)
@@ -15,28 +31,17 @@ logger = logging.getLogger(__name__)
 # Configuration
 # ==========================================================
 
-EXA_TOKEN = os.getenv("EXA_TOKEN")
 
-CHUNK_SIZE = 1000
-CHUNK_OVERLAP = 150
-
-EXA_RESULTS = 5
+EXA_TOKEN = os.getenv(
+    "EXA_TOKEN"
+)
 
 
-# ==========================================================
-# Text splitter
-# ==========================================================
-
-_splitter = RecursiveCharacterTextSplitter(
-    chunk_size=CHUNK_SIZE,
-    chunk_overlap=CHUNK_OVERLAP,
-    separators=[
-        "\n\n",
-        "\n",
-        ". ",
-        " ",
-        "",
-    ],
+EXA_RESULTS = int(
+    os.getenv(
+        "EXA_RESULTS",
+        "5",
+    )
 )
 
 
@@ -44,7 +49,9 @@ _splitter = RecursiveCharacterTextSplitter(
 # Exa client
 # ==========================================================
 
+
 _retriever: ExaSearchRetriever | None = None
+
 
 
 def get_exa_retriever() -> ExaSearchRetriever:
@@ -54,20 +61,26 @@ def get_exa_retriever() -> ExaSearchRetriever:
 
     global _retriever
 
+
     if _retriever is not None:
         return _retriever
 
+
     if not EXA_TOKEN:
+
         logger.error(
             "Environment variable EXA_TOKEN is not configured."
         )
+
         raise RuntimeError(
             "Environment variable EXA_TOKEN is not configured."
         )
 
+
     logger.info(
         "Initializing ExaSearchRetriever."
     )
+
 
     _retriever = ExaSearchRetriever(
         exa_api_key=EXA_TOKEN,
@@ -75,11 +88,14 @@ def get_exa_retriever() -> ExaSearchRetriever:
         text_contents=True,
     )
 
+
     logger.info(
         "ExaSearchRetriever initialized successfully."
     )
 
+
     return _retriever
+
 
 
 # ==========================================================
@@ -91,7 +107,7 @@ async def _search(
     query: str,
 ) -> list[Any]:
     """
-    Execute Exa web search.
+    Execute Exa search.
     """
 
     logger.info(
@@ -99,22 +115,27 @@ async def _search(
         query,
     )
 
+
     retriever = get_exa_retriever()
+
 
     documents = await retriever.ainvoke(
         query
     )
+
 
     logger.info(
         "Exa returned %d documents.",
         len(documents),
     )
 
+
     return documents
 
 
+
 # ==========================================================
-# Processing
+# Normalization
 # ==========================================================
 
 
@@ -124,143 +145,96 @@ def _normalize_document(
 ) -> dict[str, Any] | None:
     """
     Convert Exa document into internal format.
+
+    Keeps full document text.
+    Chunking is intentionally handled elsewhere.
     """
 
+
     metadata = (
+
         document.metadata
-        if hasattr(document, "metadata")
+
+        if hasattr(
+            document,
+            "metadata",
+        )
+
         else {}
     )
 
+
     text = (
+
         getattr(
             document,
             "page_content",
             "",
         )
+
         or ""
+
     ).strip()
 
 
+
     if not text:
+
         logger.debug(
             "Skipping empty Exa document."
         )
+
         return None
 
 
+
     return {
+
         "query": query,
+
 
         "title": (
             metadata.get("title")
             or "Untitled"
         ),
 
+
         "url": (
+
             metadata.get("url")
+
             or metadata.get("source")
+
             or metadata.get("link")
+
             or ""
+
         ),
 
+
+        # Full Exa content.
+        # No chunking here.
         "text": text,
+
 
         "provider": "exa",
 
+
         "published_date": (
-            metadata.get("published_date")
+            metadata.get(
+                "published_date"
+            )
         ),
+
 
         "author": (
-            metadata.get("author")
+            metadata.get(
+                "author"
+            )
         ),
+
     }
 
-
-def _chunk_documents(
-    documents: list[Any],
-    query: str,
-) -> list[dict[str, Any]]:
-    """
-    Split Exa documents into Qdrant chunks.
-    """
-
-    now = int(
-        datetime.now(
-            timezone.utc
-        ).timestamp()
-    )
-
-
-    chunks: list[dict[str, Any]] = []
-
-
-    for document in documents:
-
-        normalized = _normalize_document(
-            document,
-            query,
-        )
-
-        if normalized is None:
-            continue
-
-
-        text_chunks = _splitter.split_text(
-            normalized["text"]
-        )
-
-
-        for index, chunk in enumerate(text_chunks):
-
-            chunks.append(
-                {
-                    "id": str(
-                        uuid.uuid4()
-                    ),
-
-                    "query": (
-                        normalized["query"]
-                    ),
-
-                    "title": (
-                        normalized["title"]
-                    ),
-
-                    "url": (
-                        normalized["url"]
-                    ),
-
-                    "text": chunk,
-
-                    "provider": (
-                        normalized["provider"]
-                    ),
-
-                    "chunk_index": index,
-
-                    "published_date": (
-                        normalized["published_date"]
-                    ),
-
-                    "author": (
-                        normalized["author"]
-                    ),
-
-                    "created_at": now,
-
-                    "last_access": now,
-                }
-            )
-
-
-    logger.info(
-        "Prepared %d chunks from Exa results.",
-        len(chunks),
-    )
-
-    return chunks
 
 
 # ==========================================================
@@ -272,9 +246,27 @@ async def search_exa(
     query: str,
 ) -> list[dict[str, Any]]:
     """
-    Search web using Exa and prepare chunks
-    for semantic storage.
+    Search web using Exa.
+
+    Pipeline stage:
+
+        Exa
+          |
+          v
+        documents
+          |
+          v
+        filter.py
+          |
+          v
+        chunker.py
+          |
+          v
+        embeddings
+
+    Returns normalized full documents.
     """
+
 
     logger.info(
         "Starting Exa web search for '%s'.",
@@ -282,9 +274,11 @@ async def search_exa(
     )
 
 
+
     documents = await _search(
         query
     )
+
 
 
     if not documents:
@@ -299,21 +293,42 @@ async def search_exa(
         )
 
 
-    chunks = _chunk_documents(
-        documents,
-        query,
+
+    normalized_documents: list[
+        dict[str, Any]
+    ] = []
+
+
+
+    for document in documents:
+
+        normalized = _normalize_document(
+            document,
+            query,
+        )
+
+
+        if normalized is not None:
+
+            normalized_documents.append(
+                normalized
+            )
+
+
+
+    logger.info(
+        "Prepared %d normalized Exa documents.",
+        len(normalized_documents),
     )
 
 
-    if not chunks:
 
-        logger.warning(
-            "Exa returned documents but no usable chunks."
-        )
+    if not normalized_documents:
 
         raise ValueError(
-            "Exa returned no usable text chunks."
+            "Exa returned no usable documents."
         )
 
 
-    return chunks
+
+    return normalized_documents
