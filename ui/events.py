@@ -40,15 +40,10 @@ class UIEventType(StrEnum):
     """
 
     TOKEN = "token"
-
     TOOL_START = "tool_start"
-
     TOOL_END = "tool_end"
-
     SOURCE = "source"
-
     ERROR = "error"
-
     DONE = "done"
 
 
@@ -83,19 +78,18 @@ class TokenEvent(BaseEvent):
 
     text: str
 
-    def __init__(
-        self,
+    @classmethod
+    def create(
+        cls,
         text: str,
-        metadata: dict[str, Any] | None = None,
-    ) -> None:
+        metadata: dict[str, Any] | None = None
+    ) -> "TokenEvent":
 
-        BaseEvent.__init__(
-            self,
+        return cls(
             type=UIEventType.TOKEN,
-            metadata=metadata or {},
+            text=text,
+            metadata=metadata or {}
         )
-
-        self.text = text
 
 
 # ==========================================================
@@ -111,19 +105,18 @@ class ToolStartEvent(BaseEvent):
 
     name: str
 
-    def __init__(
-        self,
+    @classmethod
+    def create(
+        cls,
         name: str,
-        metadata: dict[str, Any] | None = None,
-    ) -> None:
+        metadata: dict[str, Any] | None = None
+    ) -> "ToolStartEvent":
 
-        BaseEvent.__init__(
-            self,
+        return cls(
             type=UIEventType.TOOL_START,
-            metadata=metadata or {},
+            name=name,
+            metadata=metadata or {}
         )
-
-        self.name = name
 
 
 @dataclass(slots=True, kw_only=True)
@@ -134,19 +127,18 @@ class ToolEndEvent(BaseEvent):
 
     name: str
 
-    def __init__(
-        self,
+    @classmethod
+    def create(
+        cls,
         name: str,
-        metadata: dict[str, Any] | None = None,
-    ) -> None:
+        metadata: dict[str, Any] | None = None
+    ) -> "ToolEndEvent":
 
-        BaseEvent.__init__(
-            self,
+        return cls(
             type=UIEventType.TOOL_END,
-            metadata=metadata or {},
+            name=name,
+            metadata=metadata or {}
         )
-
-        self.name = name
 
 
 # ==========================================================
@@ -162,19 +154,18 @@ class SourceEvent(BaseEvent):
 
     sources: list[Source]
 
-    def __init__(
-        self,
+    @classmethod
+    def create(
+        cls,
         sources: list[Source],
-        metadata: dict[str, Any] | None = None,
-    ) -> None:
+        metedata: dict[str, Any] | None = None
+    ) -> "SourceEvent":
 
-        BaseEvent.__init__(
-            self,
+        return cls(
             type=UIEventType.SOURCE,
-            metadata=metadata or {},
+            sources=sources,
+            metadata=metadata or {}
         )
-
-        self.sources = sources
 
 
 # ==========================================================
@@ -190,19 +181,18 @@ class ErrorEvent(BaseEvent):
 
     message: str
 
-    def __init__(
-        self,
+    @classmethod
+    def create(
+        cls,
         message: str,
-        metadata: dict[str, Any] | None = None,
-    ) -> None:
+        metadata: dict[str, Any] | None = None
+    ) -> "ErrorEvent":
 
-        BaseEvent.__init__(
-            self,
+        return cls(
             type=UIEventType.ERROR,
-            metadata=metadata or {},
+            message=message,
+            metadata=metadata or {}
         )
-
-        self.message = message
 
 
 # ==========================================================
@@ -216,17 +206,17 @@ class DoneEvent(BaseEvent):
     Stream finished successfully.
     """
 
-    def __init__(
-        self,
-        metadata: dict[str, Any] | None = None,
-    ) -> None:
+    @classmethod
+    def create(
+        cls,
+        metadata: dict[str, Any] | None = None
+    ) -> "DoneEvent":
 
-        BaseEvent.__init__(
-            self,
+        return cls(
             type=UIEventType.DONE,
-            metadata=metadata or {},
+            metadata=metadata or {}
         )
-
+    
 
 # ==========================================================
 # Public Union Type
