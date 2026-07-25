@@ -89,7 +89,8 @@ class TokenEvent(BaseEvent):
         metadata: dict[str, Any] | None = None,
     ) -> None:
 
-        super().__init__(
+        BaseEvent.__init__(
+            self,
             type=UIEventType.TOKEN,
             metadata=metadata or {},
         )
@@ -116,7 +117,8 @@ class ToolStartEvent(BaseEvent):
         metadata: dict[str, Any] | None = None,
     ) -> None:
 
-        super().__init__(
+        BaseEvent.__init__(
+            self,
             type=UIEventType.TOOL_START,
             metadata=metadata or {},
         )
@@ -138,7 +140,8 @@ class ToolEndEvent(BaseEvent):
         metadata: dict[str, Any] | None = None,
     ) -> None:
 
-        super().__init__(
+        BaseEvent.__init__(
+            self,
             type=UIEventType.TOOL_END,
             metadata=metadata or {},
         )
@@ -165,7 +168,8 @@ class SourceEvent(BaseEvent):
         metadata: dict[str, Any] | None = None,
     ) -> None:
 
-        super().__init__(
+        BaseEvent.__init__(
+            self,
             type=UIEventType.SOURCE,
             metadata=metadata or {},
         )
@@ -192,7 +196,8 @@ class ErrorEvent(BaseEvent):
         metadata: dict[str, Any] | None = None,
     ) -> None:
 
-        super().__init__(
+        BaseEvent.__init__(
+            self,
             type=UIEventType.ERROR,
             metadata=metadata or {},
         )
@@ -216,7 +221,8 @@ class DoneEvent(BaseEvent):
         metadata: dict[str, Any] | None = None,
     ) -> None:
 
-        super().__init__(
+        BaseEvent.__init__(
+            self,
             type=UIEventType.DONE,
             metadata=metadata or {},
         )
