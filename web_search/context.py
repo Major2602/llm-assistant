@@ -1,16 +1,36 @@
 """
 Web search orchestration layer.
 
-Responsible for:
-- semantic cache lookup;
-- Exa fallback search;
-- context preparation for LLM;
-- source extraction for UI citations.
+Pipeline:
+
+Query
+ |
+ v
+Semantic cache (Qdrant)
+ |
+ +-- hit
+ |
+ +-- miss
+        |
+        v
+      Exa
+        |
+        v
+    Cheap filtering
+        |
+        v
+    Embeddings
+        |
+        v
+    Reranking
+        |
+        v
+    Qdrant memory
 
 This module does not know about:
-- Chainlit;
-- LangChain agent internals;
-- UI rendering.
+- Chainlit
+- UI
+- LangGraph internals
 """
 
 from __future__ import annotations
@@ -19,11 +39,22 @@ import asyncio
 import logging
 from typing import Any
 
+
 from web_search.exa import search_exa
+
+from web_search.filter import (
+    filter_documents,
+)
+
+from web_search.reranker import (
+    rerank_chunks,
+)
+
 from web_search.models import (
     AgentContext,
     Source,
 )
+
 from web_search.qdrant_store import (
     add_chunks,
     cleanup_old_chunks,
@@ -39,9 +70,16 @@ logger = logging.getLogger(__name__)
 # ==========================================================
 
 
-TOP_K = 5
+CACHE_TOP_K = 5
+
+FINAL_CONTEXT_K = 8
 
 SIMILARITY_THRESHOLD = 0.70
+
+
+# количество кандидатов после дешевого фильтра
+RERANK_INPUT_K = 30
+
 
 
 # ==========================================================
@@ -57,7 +95,7 @@ _init_lock = asyncio.Lock()
 
 async def init_web_search() -> None:
     """
-    Initialize web_search subsystem once.
+    Initialize web search subsystem once.
     """
 
     global _initialized
@@ -112,10 +150,7 @@ def _format_context(
     chunks: list[dict[str, Any]],
 ) -> str:
     """
-    Prepare retrieved chunks for LLM context.
-
-    URLs and metadata are intentionally excluded.
-    They are returned separately as sources.
+    Format selected chunks for LLM.
     """
 
     result: list[str] = []
@@ -139,9 +174,7 @@ Text:
         )
 
 
-    return "\n\n".join(
-        result
-    )
+    return "\n\n".join(result)
 
 
 
@@ -154,7 +187,7 @@ def _extract_sources(
     chunks: list[dict[str, Any]],
 ) -> list[Source]:
     """
-    Convert chunks metadata into UI sources.
+    Extract unique sources.
     """
 
     sources: list[Source] = []
@@ -164,9 +197,9 @@ def _extract_sources(
 
     for chunk in chunks:
 
-        url = (
-            chunk.get("url")
-            or ""
+        url = chunk.get(
+            "url",
+            "",
         )
 
 
@@ -178,16 +211,16 @@ def _extract_sources(
             continue
 
 
-        seen_urls.add(
-            url
-        )
+        seen_urls.add(url)
 
 
         sources.append(
             Source(
 
                 title=(
-                    chunk.get("title")
+                    chunk.get(
+                        "title"
+                    )
                     or "Untitled source"
                 ),
 
@@ -212,18 +245,12 @@ def _extract_sources(
         )
 
 
-    logger.debug(
-        "Extracted %d unique sources.",
-        len(sources),
-    )
-
-
     return sources
 
 
 
 # ==========================================================
-# Main context builder
+# Main pipeline
 # ==========================================================
 
 
@@ -231,40 +258,19 @@ async def get_context(
     query: str,
 ) -> AgentContext:
     """
-    Retrieve context for agent.
+    Build context for agent.
 
-    Flow:
+    Pipeline:
 
-        Query
-          |
-          v
-    Qdrant semantic cache
-
-          |
-          +-- hit
-          |
-          v
-
-    AgentContext
-
-
-          |
-          +-- miss
-          |
-          v
-
-        Exa search
-
-          |
-          v
-
-      Store in Qdrant
-
-          |
-          v
-
-      AgentContext
+    1. Semantic cache lookup
+    2. Exa retrieval
+    3. Cheap filtering
+    4. Embedding generation
+    5. Reranking
+    6. Qdrant persistence
+    7. Context preparation
     """
+
 
     await init_web_search()
 
@@ -277,83 +283,128 @@ async def get_context(
 
     try:
 
-        # -------------------------------------------------
-        # 1. Semantic cache
-        # -------------------------------------------------
 
-        chunks = await search(
+        # ==================================================
+        # 1. Semantic cache
+        # ==================================================
+
+        cached_chunks = await search(
             query=query,
-            limit=TOP_K,
+            limit=CACHE_TOP_K,
             score_threshold=SIMILARITY_THRESHOLD,
         )
 
 
-        if chunks:
+        if cached_chunks:
 
             logger.info(
                 "Semantic cache hit. Chunks=%d",
-                len(chunks),
+                len(cached_chunks),
             )
 
 
             return AgentContext(
 
                 text=_format_context(
-                    chunks
+                    cached_chunks
                 ),
 
                 sources=_extract_sources(
-                    chunks
+                    cached_chunks
                 ),
             )
 
 
 
         logger.info(
-            "Semantic cache miss. Using Exa."
+            "Semantic cache miss."
         )
 
 
 
-        # -------------------------------------------------
-        # 2. External search
-        # -------------------------------------------------
+        # ==================================================
+        # 2. Exa search
+        # ==================================================
 
-        web_chunks = await search_exa(
+        documents = await search_exa(
             query
         )
 
 
         logger.info(
-            "Exa returned %d chunks.",
-            len(web_chunks),
+            "Exa documents received=%d",
+            len(documents),
         )
 
 
 
-        # -------------------------------------------------
-        # 3. Store memory
-        # -------------------------------------------------
+        # ==================================================
+        # 3. Cheap filtering
+        # ==================================================
 
-        await add_chunks(
-            web_chunks
+        candidates = filter_documents(
+            documents,
+            query=query,
+            limit=RERANK_INPUT_K,
         )
 
 
         logger.info(
-            "Stored Exa chunks in Qdrant."
+            "After filtering=%d candidates",
+            len(candidates),
         )
 
 
 
-        # -------------------------------------------------
-        # 4. Prepare response
-        # -------------------------------------------------
+        if not candidates:
 
-        selected_chunks = (
-            web_chunks[:TOP_K]
+            raise RuntimeError(
+                "No usable documents after filtering."
+            )
+
+
+
+        # ==================================================
+        # 4-5 Embedding + reranking
+        # ==================================================
+
+        ranked_chunks = await rerank_chunks(
+            query=query,
+            chunks=candidates,
         )
 
+
+        selected_chunks = ranked_chunks[
+            :FINAL_CONTEXT_K
+        ]
+
+
+        logger.info(
+            "Reranked chunks selected=%d",
+            len(selected_chunks),
+        )
+
+
+
+        # ==================================================
+        # 6. Store only final memory
+        # ==================================================
+
+        await add_chunks(
+            selected_chunks
+        )
+
+
+        logger.info(
+            "Stored %d chunks into Qdrant.",
+            len(selected_chunks),
+        )
+
+
+
+        # ==================================================
+        # 7. Return context
+        # ==================================================
 
         return AgentContext(
 
