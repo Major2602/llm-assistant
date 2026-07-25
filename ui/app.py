@@ -22,12 +22,21 @@ from ui.logger import configure_ui_logging
 # Logging
 # ==========================================================
 
+logging.basicConfig(
+    level=logging.INFO,
+    format=(
+        "%(asctime)s "
+        "%(levelname)s "
+        "%(name)s "
+        "%(message)s"
+    ),
+)
 
 configure_ui_logging()
 
-logger = logging.getLogger(
-    __name__
-)
+logger = logging.getLogger(__name__)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 logger.info(
