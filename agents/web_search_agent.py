@@ -10,16 +10,23 @@ Streaming and event conversion are handled by ui.streaming.
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any
+
 
 from langchain.agents import create_agent
 from langchain.tools import tool
 
+
 from llm import get_llm
-from web_search.context import get_context
+
+from web_search.context import (
+    get_context,
+)
 
 
 logger = logging.getLogger(__name__)
+
 
 
 # ==========================================================
@@ -32,32 +39,47 @@ logger = logging.getLogger(__name__)
 )
 async def web_search(
     query: str,
-) -> tuple[str, dict]:
+) -> tuple[str, dict[str, Any]]:
     """
-    Search the web and semantic memory.
-
-    Workflow:
-    - searches semantic memory;
-    - falls back to Exa web search if required;
-    - stores new information;
-    - returns context and source metadata.
+    Search external information sources.
 
     Use this tool for:
+
     - factual questions;
-    - current information;
-    - external knowledge.
+    - recent information;
+    - information not available in conversation.
+
+    Returns:
+
+    - relevant context;
+    - source metadata.
     """
+
 
     logger.info(
         "Web search tool called. Query='%s'",
         query,
     )
 
+
     try:
 
         context = await get_context(
             query
         )
+
+
+        artifact = {
+
+            "sources": [
+
+                source.model_dump()
+
+                for source in context.sources
+
+            ]
+
+        }
 
 
         logger.info(
@@ -68,14 +90,12 @@ async def web_search(
         )
 
 
-        artifact = {
-            "sources": context.sources,
-        }
-
-
         return (
+
             context.text,
+
             artifact,
+
         )
 
 
@@ -97,12 +117,15 @@ async def web_search(
 
 _agent: Any | None = None
 
+_agent_lock = threading.Lock()
+
 
 
 def get_agent() -> Any:
     """
     Create and return singleton LangChain agent.
     """
+
 
     global _agent
 
@@ -111,23 +134,35 @@ def get_agent() -> Any:
         return _agent
 
 
-    try:
 
-        logger.info(
-            "Initializing web_search agent."
-        )
+    with _agent_lock:
 
 
-        _agent = create_agent(
-
-            model=get_llm(),
-
-            tools=[
-                web_search,
-            ],
+        if _agent is not None:
+            return _agent
 
 
-            system_prompt="""
+
+        try:
+
+            logger.info(
+                "Initializing web_search agent."
+            )
+
+
+            _agent = create_agent(
+
+                model=get_llm(),
+
+
+                tools=[
+
+                    web_search,
+
+                ],
+
+
+                system_prompt="""
 
 You are a helpful AI assistant.
 
@@ -155,29 +190,32 @@ unless the user explicitly asks.
 
 Always answer in the user's language.
 
-When sources are provided, use them naturally
-and avoid inventing unsupported facts.
+When sources are provided:
+- use them naturally;
+- avoid inventing unsupported facts;
+- clearly distinguish known information from uncertainty.
 
 """,
 
-        )
+            )
 
 
-        logger.info(
-            "Web search agent initialized successfully."
-        )
+            logger.info(
+                "Web search agent initialized successfully."
+            )
 
 
-        return _agent
+            return _agent
 
 
-    except Exception:
 
-        logger.exception(
-            "Failed initializing web_search agent."
-        )
+        except Exception:
 
-        raise
+            logger.exception(
+                "Failed initializing web_search agent."
+            )
+
+            raise
 
 
 
@@ -195,6 +233,7 @@ async def ask_agent(
     Used for testing or non-UI integrations.
     """
 
+
     logger.info(
         "Agent request received."
     )
@@ -205,29 +244,40 @@ async def ask_agent(
         agent = get_agent()
 
 
+
         result = await agent.ainvoke(
+
             {
                 "messages": [
+
                     {
                         "role": "user",
                         "content": text,
                     }
+
                 ]
             }
+
         )
 
 
-        messages = (
-            result.get(
-                "messages",
-                []
+
+        if not isinstance(
+            result,
+            dict,
+        ):
+
+            raise RuntimeError(
+                "Unexpected agent response format."
             )
-            if isinstance(
-                result,
-                dict,
-            )
-            else []
+
+
+
+        messages = result.get(
+            "messages",
+            [],
         )
+
 
 
         if not messages:
@@ -237,7 +287,25 @@ async def ask_agent(
             )
 
 
-        response = messages[-1].content
+
+        content = messages[-1].content
+
+
+
+        if isinstance(
+            content,
+            str,
+        ):
+
+            response = content
+
+
+        else:
+
+            response = str(
+                content
+            )
+
 
 
         logger.info(
@@ -246,6 +314,7 @@ async def ask_agent(
 
 
         return response
+
 
 
     except Exception:
