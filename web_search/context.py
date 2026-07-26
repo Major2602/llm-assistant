@@ -16,10 +16,10 @@ Semantic cache (Qdrant)
       Exa
         |
         v
-      Filtering
+      Chunking
         |
         v
-      Chunking
+      Chunk filtering
         |
         v
       Reranking
@@ -37,9 +37,7 @@ This module does not know about:
 - LangGraph internals.
 """
 
-
 from __future__ import annotations
-
 
 import asyncio
 import logging
@@ -48,12 +46,12 @@ from typing import Any
 
 from web_search.exa import search_exa
 
-from web_search.filter import (
-    filter_documents,
-)
-
 from web_search.chunker import (
     chunk_documents,
+)
+
+from web_search.filter import (
+    filter_chunks,
 )
 
 from web_search.reranker import (
@@ -73,7 +71,6 @@ from web_search.models import (
 
 
 logger = logging.getLogger(__name__)
-
 
 
 # ==========================================================
@@ -249,6 +246,9 @@ def _extract_sources(
                         "rerank_score"
                     )
                     or chunk.get(
+                        "filter_score"
+                    )
+                    or chunk.get(
                         "score"
                     )
                 ),
@@ -280,23 +280,47 @@ async def get_context(
 ) -> AgentContext:
     """
     Build context for agent.
+
+    Pipeline:
+
+        Qdrant cache
+            |
+            v
+        Exa documents
+            |
+            v
+        Chunking
+            |
+            v
+        Chunk filtering
+            |
+            v
+        Reranking
+            |
+            v
+        Qdrant memory
     """
+
 
     query = query.strip()
 
+
     if not query:
-     
-     raise ValueError(
-      "Query cannot be empty."
-     )
- 
+
+        raise ValueError(
+            "Query cannot be empty."
+        )
+
+
     await init_web_search()
+
 
 
     logger.info(
         "Building context for query='%s'",
         query,
     )
+
 
 
     try:
@@ -362,38 +386,11 @@ async def get_context(
 
 
         # ==================================================
-        # 3. Cheap filtering
-        # ==================================================
-
-        filtered_documents = filter_documents(
-
-            documents,
-
-            query,
-
-        )
-
-
-        if not filtered_documents:
-
-            raise RuntimeError(
-                "No documents after filtering."
-            )
-
-
-        logger.info(
-            "Filtered documents=%d",
-            len(filtered_documents),
-        )
-
-
-
-        # ==================================================
-        # 4. Chunking
+        # 3. Chunking
         # ==================================================
 
         chunks = chunk_documents(
-            filtered_documents
+            documents
         )
 
 
@@ -409,11 +406,43 @@ async def get_context(
             len(chunks),
         )
 
-        chunks = chunks[:MAX_RERANK_CHUNKS]
+
+
+        # ==================================================
+        # 4. Chunk filtering
+        # ==================================================
+
+        filtered_chunks = filter_chunks(
+
+            chunks,
+
+            query,
+
+        )
+
+
+        if not filtered_chunks:
+
+            raise RuntimeError(
+                "No chunks after filtering."
+            )
+
+
+        logger.info(
+            "Filtered chunks=%d",
+            len(filtered_chunks),
+        )
+
+
+
+        filtered_chunks = filtered_chunks[
+            :MAX_RERANK_CHUNKS
+        ]
+
 
         logger.info(
             "Chunks sent to reranker=%d",
-            len(chunks)
+            len(filtered_chunks),
         )
 
 
@@ -429,7 +458,7 @@ async def get_context(
 
             query=query,
 
-            chunks=chunks,
+            chunks=filtered_chunks,
 
             top_k=RERANK_OUTPUT_K,
 
