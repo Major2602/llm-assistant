@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 
 MIN_CHUNK_LENGTH = 200
 
-MAX_CHUNKS = 50
+MAX_CHUNKS = 10
 
 MIN_SCORE = 0.25
 
