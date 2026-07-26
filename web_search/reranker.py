@@ -50,6 +50,8 @@ REQUEST_TIMEOUT = 60.0
 
 RERANK_MODEL = "@cf/baai/bge-reranker-base"
 
+MAX_RERANK_TOKENS = 450
+
 CF_ACCOUNT_ID = os.getenv(
     "CF_ACCOUNT_ID"
 )
