@@ -5,11 +5,11 @@ Pipeline position:
 
 Exa
  ↓
-filter.py
- ↓
 chunker.py
  ↓
-cloudflare_embeddings.py
+filter.py
+ ↓
+embedding
  ↓
 reranker.py
  ↓
@@ -18,7 +18,7 @@ qdrant_store.py
 
 Responsibilities:
 - semantic cache lookup;
-- embedding generation for final chunks;
+- embedding generation for final ranked chunks;
 - vector storage;
 - memory cleanup.
 
@@ -57,7 +57,6 @@ from web_search.cloudflare_embeddings import (
 
 
 logger = logging.getLogger(__name__)
-
 
 
 # ==========================================================
@@ -123,7 +122,7 @@ def get_qdrant() -> AsyncQdrantClient:
 
 
 # ==========================================================
-# Collection management
+# Collection
 # ==========================================================
 
 
@@ -142,7 +141,7 @@ async def ensure_collection(
     vector_size: int,
 ) -> None:
     """
-    Create collection if missing.
+    Create Qdrant collection if missing.
     """
 
 
@@ -163,12 +162,17 @@ async def ensure_collection(
 
 
         await client.create_collection(
+
             collection_name=COLLECTION_NAME,
 
             vectors_config=VectorParams(
+
                 size=vector_size,
+
                 distance=Distance.COSINE,
+
             ),
+
         )
 
 
@@ -202,7 +206,7 @@ async def _payload_index_exists(
 
 async def ensure_payload_indexes() -> None:
     """
-    Ensure searchable payload fields.
+    Ensure required payload indexes.
     """
 
 
@@ -225,9 +229,7 @@ async def ensure_payload_indexes() -> None:
 
     for field, schema in indexes.items():
 
-        if await _payload_index_exists(
-            field
-        ):
+        if await _payload_index_exists(field):
             continue
 
 
@@ -238,9 +240,13 @@ async def ensure_payload_indexes() -> None:
 
 
         await get_qdrant().create_payload_index(
+
             collection_name=COLLECTION_NAME,
+
             field_name=field,
+
             field_schema=schema,
+
         )
 
 
@@ -254,10 +260,22 @@ async def add_chunks(
     chunks: list[dict[str, Any]],
 ) -> None:
     """
-    Store final reranked chunks.
+    Store reranked chunks.
 
     Expected input:
-        5-10 chunks after reranker.py
+
+        chunks after reranker.py
+
+    Example:
+
+        [
+            {
+                "id": "...",
+                "text": "...",
+                "url": "...",
+                "rerank_score": 0.91
+            }
+        ]
     """
 
 
@@ -272,7 +290,7 @@ async def add_chunks(
 
 
     logger.info(
-        "Embedding and storing %d final chunks.",
+        "Embedding and storing %d chunks.",
         len(chunks),
     )
 
@@ -310,9 +328,6 @@ async def add_chunks(
 
 
 
-    points = []
-
-
     now = int(
         datetime.now(
             timezone.utc
@@ -320,25 +335,31 @@ async def add_chunks(
     )
 
 
+    points: list[PointStruct] = []
+
+
+
     for chunk, vector in zip(
         chunks,
         vectors,
     ):
 
+
         payload = {
 
             **chunk,
 
-            "created_at":
+            "created_at": (
                 chunk.get(
                     "created_at",
                     now,
-                ),
+                )
+            ),
 
-            "last_access":
-                now,
+            "last_access": now,
 
         }
+
 
 
         points.append(
@@ -356,9 +377,13 @@ async def add_chunks(
         )
 
 
+
     await get_qdrant().upsert(
+
         collection_name=COLLECTION_NAME,
+
         points=points,
+
     )
 
 
@@ -380,7 +405,7 @@ async def search(
     score_threshold: float = 0.70,
 ) -> list[dict[str, Any]]:
     """
-    Semantic cache lookup.
+    Semantic memory lookup.
     """
 
 
@@ -402,6 +427,7 @@ async def search(
     )
 
 
+
     result = await get_qdrant().query_points(
 
         collection_name=COLLECTION_NAME,
@@ -418,6 +444,7 @@ async def search(
     hits = result.points
 
 
+
     if not hits:
 
         return []
@@ -427,7 +454,7 @@ async def search(
     if hits[0].score < score_threshold:
 
         logger.info(
-            "Cache miss. Score %.3f",
+            "Semantic cache miss. Score %.3f",
             hits[0].score,
         )
 
@@ -436,10 +463,12 @@ async def search(
 
 
     await update_last_access(
+
         [
             point.id
             for point in hits
         ]
+
     )
 
 
@@ -465,17 +494,24 @@ async def search(
 async def update_last_access(
     ids: list[str],
 ) -> None:
+    """
+    Update memory freshness timestamp.
+    """
 
 
     if not ids:
         return
 
 
+
     timestamp = int(
+
         datetime.now(
             timezone.utc
         ).timestamp()
+
     )
+
 
 
     await get_qdrant().set_payload(
@@ -501,7 +537,7 @@ async def cleanup_old_chunks(
     days: int = 30,
 ) -> None:
     """
-    Remove unused memory.
+    Remove stale semantic memory.
     """
 
 
@@ -525,6 +561,7 @@ async def cleanup_old_chunks(
         ).timestamp()
 
     )
+
 
 
     await get_qdrant().delete(
