@@ -1,54 +1,94 @@
 """
-Qdrant storage layer.
+Qdrant hybrid memory layer.
 
-Pipeline position:
+Baseline Architecture v1:
 
-Exa
- ↓
-chunker.py
- ↓
-filter.py
- ↓
-embedding
- ↓
-reranker.py
- ↓
-qdrant_store.py
+User Query
+    |
+    v
+Qdrant Hybrid Retrieval
+(Dense + BM25 + RRF)
+    |
+    v
+Candidates
+    |
+    v
+Embedding similarity
+    |
+    v
+Reranker
+    |
+    v
+Context
 
 
 Responsibilities:
-- semantic cache lookup;
-- embedding generation for final ranked chunks;
-- vector storage;
-- memory cleanup.
 
-This module does NOT:
-- call Exa;
-- split documents;
-- filter chunks;
-- rerank chunks.
+- dense vector storage
+- BM25 sparse storage
+- hybrid retrieval
+- RRF fusion
+- semantic memory
+- cleanup lifecycle
+
+
+Does NOT:
+
+- call Exa
+- chunk documents
+- filter chunks
+- rerank
+- compress context
 """
 
 from __future__ import annotations
 
+
 import logging
 import os
 
-from datetime import datetime, timedelta, timezone
+
+from datetime import (
+    datetime,
+    timedelta,
+    timezone,
+)
+
+
 from typing import Any
 
 
 from qdrant_client import AsyncQdrantClient
 
+
 from qdrant_client.models import (
+
     Distance,
-    FieldCondition,
-    Filter,
-    PayloadSchemaType,
-    PointStruct,
-    Range,
+
     VectorParams,
+
+    SparseVectorParams,
+
+    SparseVector,
+
+    PointStruct,
+
+    SparseIndexParams,
+
+    Modifier,
+
+    Filter,
+
+    FieldCondition,
+
+    Range,
+
+    PayloadSchemaType,
+
 )
+
+
+from fastembed import SparseTextEmbedding
 
 
 from web_search.cloudflare_embeddings import (
@@ -56,7 +96,9 @@ from web_search.cloudflare_embeddings import (
 )
 
 
+
 logger = logging.getLogger(__name__)
+
 
 
 # ==========================================================
@@ -71,13 +113,15 @@ QDRANT_URL = os.getenv(
 
 if not QDRANT_URL:
     raise RuntimeError(
-        "Environment variable QDRANT_URL is not configured."
+        "QDRANT_URL missing."
     )
+
 
 
 QDRANT_API_KEY = os.getenv(
     "QDRANT_API_KEY"
 )
+
 
 
 COLLECTION_NAME = os.getenv(
@@ -87,8 +131,19 @@ COLLECTION_NAME = os.getenv(
 
 
 
+DENSE_VECTOR_NAME = "dense"
+
+
+SPARSE_VECTOR_NAME = "bm25"
+
+
+
+HYBRID_LIMIT = 10
+
+
+
 # ==========================================================
-# Client
+# Clients
 # ==========================================================
 
 
@@ -96,9 +151,14 @@ _client: AsyncQdrantClient | None = None
 
 
 
+_sparse_encoder: SparseTextEmbedding | None = None
+
+
+
+
 def get_qdrant() -> AsyncQdrantClient:
     """
-    Return singleton Qdrant client.
+    Singleton Qdrant client.
     """
 
     global _client
@@ -107,17 +167,51 @@ def get_qdrant() -> AsyncQdrantClient:
     if _client is None:
 
         logger.info(
-            "Initializing AsyncQdrantClient."
+            "Initializing Qdrant client."
         )
 
 
         _client = AsyncQdrantClient(
+
             url=QDRANT_URL,
+
             api_key=QDRANT_API_KEY,
+
         )
 
 
     return _client
+
+
+
+
+
+def get_sparse_encoder() -> SparseTextEmbedding:
+    """
+    Singleton BM25 encoder.
+    """
+
+    global _sparse_encoder
+
+
+    if _sparse_encoder is None:
+
+        logger.info(
+            "Initializing BM25 encoder."
+        )
+
+
+        _sparse_encoder = SparseTextEmbedding(
+
+            model_name=(
+                "Qdrant/bm25"
+            )
+
+        )
+
+
+    return _sparse_encoder
+
 
 
 
@@ -127,13 +221,14 @@ def get_qdrant() -> AsyncQdrantClient:
 
 
 async def collection_exists() -> bool:
-    """
-    Check collection existence.
-    """
 
     return await get_qdrant().collection_exists(
+
         COLLECTION_NAME
+
     )
+
+
 
 
 
@@ -141,102 +236,109 @@ async def ensure_collection(
     vector_size: int,
 ) -> None:
     """
-    Create Qdrant collection if missing.
+    Create hybrid collection.
     """
 
 
     client = get_qdrant()
 
 
-    exists = await client.collection_exists(
+
+    if not await client.collection_exists(
         COLLECTION_NAME
-    )
+    ):
 
-
-    if not exists:
 
         logger.info(
-            "Creating Qdrant collection '%s'.",
-            COLLECTION_NAME,
+            "Creating hybrid collection."
         )
+
 
 
         await client.create_collection(
 
             collection_name=COLLECTION_NAME,
 
-            vectors_config=VectorParams(
 
-                size=vector_size,
+            vectors_config={
 
-                distance=Distance.COSINE,
+                DENSE_VECTOR_NAME:
 
-            ),
+                    VectorParams(
+
+                        size=vector_size,
+
+                        distance=Distance.COSINE,
+
+                    )
+
+            },
+
+
+            sparse_vectors_config={
+
+                SPARSE_VECTOR_NAME:
+
+                    SparseVectorParams(
+
+                        index=SparseIndexParams(),
+
+                        modifier=Modifier.IDF,
+
+                    )
+
+            },
 
         )
+
 
 
     await ensure_payload_indexes()
 
 
 
-# ==========================================================
-# Payload indexes
-# ==========================================================
 
 
-async def _payload_index_exists(
-    field_name: str,
-) -> bool:
+async def ensure_payload_indexes():
+
+    indexes = {
+
+        "url":
+            PayloadSchemaType.KEYWORD,
+
+
+        "provider":
+            PayloadSchemaType.KEYWORD,
+
+
+        "last_access":
+            PayloadSchemaType.INTEGER,
+
+    }
+
+
 
     collection = await get_qdrant().get_collection(
+
         COLLECTION_NAME
+
     )
 
 
-    schema = (
+    existing = (
         collection.payload_schema
         or {}
     )
 
 
-    return field_name in schema
-
-
-
-async def ensure_payload_indexes() -> None:
-    """
-    Ensure required payload indexes.
-    """
-
-
-    indexes = {
-
-        "last_access":
-            PayloadSchemaType.INTEGER,
-
-        "query":
-            PayloadSchemaType.KEYWORD,
-
-        "provider":
-            PayloadSchemaType.KEYWORD,
-
-        "url":
-            PayloadSchemaType.KEYWORD,
-
-    }
-
 
     for field, schema in indexes.items():
 
-        if await _payload_index_exists(field):
+
+        if field in existing:
+
             continue
 
-
-        logger.info(
-            "Creating payload index '%s'.",
-            field,
-        )
 
 
         await get_qdrant().create_payload_index(
@@ -251,8 +353,57 @@ async def ensure_payload_indexes() -> None:
 
 
 
+
+
 # ==========================================================
-# Insert
+# Embeddings
+# ==========================================================
+
+
+async def _dense_embedding(
+    texts: list[str],
+):
+
+    embedder = get_embedding_model()
+
+
+    return await embedder.embed_documents(
+        texts
+    )
+
+
+
+
+
+def _sparse_embedding(
+    text: str,
+) -> SparseVector:
+
+
+    encoder = get_sparse_encoder()
+
+
+    result = next(
+        encoder.embed(
+            [text]
+        )
+    )
+
+
+    return SparseVector(
+
+        indices=result.indices.tolist(),
+
+        values=result.values.tolist(),
+
+    )
+
+
+
+
+
+# ==========================================================
+# Storage
 # ==========================================================
 
 
@@ -260,49 +411,21 @@ async def add_chunks(
     chunks: list[dict[str, Any]],
 ) -> None:
     """
-    Store reranked chunks.
-
-    Expected input:
-
-        chunks after reranker.py
-
-    Example:
-
-        [
-            {
-                "id": "...",
-                "text": "...",
-                "url": "...",
-                "rerank_score": 0.91
-            }
-        ]
+    Store final reranked chunks.
     """
 
 
     if not chunks:
 
-        logger.info(
-            "No chunks provided for storage."
-        )
-
         return
 
-
-
-    logger.info(
-        "Embedding and storing %d chunks.",
-        len(chunks),
-    )
-
-
-    embedder = get_embedding_model()
 
 
     texts = [
 
         chunk.get(
             "text",
-            "",
+            ""
         )
 
         for chunk in chunks
@@ -310,38 +433,41 @@ async def add_chunks(
     ]
 
 
-    vectors = await embedder.embed_documents(
+
+    dense_vectors = await _dense_embedding(
         texts
     )
 
 
-    if len(vectors) != len(chunks):
-
-        raise RuntimeError(
-            "Embedding count does not match chunk count."
-        )
-
 
     await ensure_collection(
-        len(vectors[0])
+        len(
+            dense_vectors[0]
+        )
     )
 
 
 
     now = int(
+
         datetime.now(
             timezone.utc
         ).timestamp()
+
     )
 
 
-    points: list[PointStruct] = []
+
+    points = []
 
 
 
-    for chunk, vector in zip(
+    for chunk, dense in zip(
+
         chunks,
-        vectors,
+
+        dense_vectors,
+
     ):
 
 
@@ -349,14 +475,18 @@ async def add_chunks(
 
             **chunk,
 
-            "created_at": (
+
+            "created_at":
+
                 chunk.get(
                     "created_at",
-                    now,
-                )
-            ),
+                    now
+                ),
 
-            "last_access": now,
+
+            "last_access":
+
+                now,
 
         }
 
@@ -368,7 +498,24 @@ async def add_chunks(
 
                 id=chunk["id"],
 
-                vector=vector,
+
+                vector={
+
+                    DENSE_VECTOR_NAME:
+
+                        dense,
+
+
+                    SPARSE_VECTOR_NAME:
+
+                        _sparse_embedding(
+
+                            chunk["text"]
+
+                        )
+
+                },
+
 
                 payload=payload,
 
@@ -388,60 +535,119 @@ async def add_chunks(
 
 
     logger.info(
-        "Inserted %d chunks into Qdrant.",
+
+        "Stored %d hybrid chunks.",
+
         len(points),
+
     )
 
 
 
+
+
 # ==========================================================
-# Semantic search
+# Hybrid Retrieval
 # ==========================================================
 
 
-async def search(
+async def hybrid_search(
     query: str,
-    limit: int = 5,
-    score_threshold: float = 0.70,
-) -> list[dict[str, Any]]:
+    limit: int = HYBRID_LIMIT,
+) -> list[dict[str,Any]]:
     """
-    Semantic memory lookup.
+    Dense + BM25 hybrid retrieval.
     """
 
 
     if not await collection_exists():
 
-        logger.info(
-            "Qdrant collection does not exist."
-        )
-
         return []
 
 
 
-    embedder = get_embedding_model()
+    dense = await get_embedding_model().embed_query(
+
+        query
+
+    )
 
 
-    query_vector = await embedder.embed_query(
+
+    sparse = _sparse_embedding(
         query
     )
 
 
 
-    result = await get_qdrant().query_points(
+    results = await get_qdrant().query_points(
 
         collection_name=COLLECTION_NAME,
 
-        query=query_vector,
+
+        prefetch=[
+
+
+            {
+
+                "query":
+
+                    dense,
+
+
+                "using":
+
+                    DENSE_VECTOR_NAME,
+
+
+                "limit":
+
+                    limit,
+
+            },
+
+
+            {
+
+                "query":
+
+                    sparse,
+
+
+                "using":
+
+                    SPARSE_VECTOR_NAME,
+
+
+                "limit":
+
+                    limit,
+
+            },
+
+
+        ],
+
+
+        query={
+
+            "fusion":
+
+                "rrf"
+
+        },
+
 
         limit=limit,
+
 
         with_payload=True,
 
     )
 
 
-    hits = result.points
+
+    hits = results.points
 
 
 
@@ -451,22 +657,11 @@ async def search(
 
 
 
-    if hits[0].score < score_threshold:
-
-        logger.info(
-            "Semantic cache miss. Score %.3f",
-            hits[0].score,
-        )
-
-        return []
-
-
-
     await update_last_access(
 
         [
-            point.id
-            for point in hits
+            x.id
+            for x in hits
         ]
 
     )
@@ -476,30 +671,34 @@ async def search(
     return [
 
         {
-            **point.payload,
-            "score": point.score,
+
+            **hit.payload,
+
+            "score":
+
+                hit.score,
+
         }
 
-        for point in hits
+        for hit in hits
 
     ]
 
 
 
+
+
 # ==========================================================
-# Access update
+# Access
 # ==========================================================
 
 
 async def update_last_access(
-    ids: list[str],
-) -> None:
-    """
-    Update memory freshness timestamp.
-    """
-
+    ids:list[str],
+):
 
     if not ids:
+
         return
 
 
@@ -518,13 +717,21 @@ async def update_last_access(
 
         collection_name=COLLECTION_NAME,
 
+
         payload={
-            "last_access": timestamp
+
+            "last_access":
+
+                timestamp
+
         },
+
 
         points=ids,
 
     )
+
+
 
 
 
@@ -534,12 +741,8 @@ async def update_last_access(
 
 
 async def cleanup_old_chunks(
-    days: int = 30,
-) -> None:
-    """
-    Remove stale semantic memory.
-    """
-
+    days:int=30,
+):
 
     if not await collection_exists():
 
@@ -550,10 +753,13 @@ async def cleanup_old_chunks(
     cutoff = int(
 
         (
+
             datetime.now(
                 timezone.utc
             )
+
             -
+
             timedelta(
                 days=days
             )
@@ -567,6 +773,7 @@ async def cleanup_old_chunks(
     await get_qdrant().delete(
 
         collection_name=COLLECTION_NAME,
+
 
         points_selector=Filter(
 
@@ -584,12 +791,11 @@ async def cleanup_old_chunks(
 
             ]
 
-        ),
+        )
 
     )
 
 
     logger.info(
-        "Removed chunks older than %d days.",
-        days,
+        "Old memory cleaned."
     )
