@@ -1,14 +1,12 @@
 """
-Chunking layer for web search pipeline.
-
-Responsible for:
-- splitting raw Exa documents into semantic chunks;
-- preparing chunks for filtering and reranking;
-- preserving source metadata.
+Semantic document chunking layer.
 
 Pipeline position:
 
 Exa
+ |
+ v
+Document normalize
  |
  v
 chunker.py
@@ -17,22 +15,37 @@ chunker.py
 filter.py
  |
  v
+embedding similarity
+ |
+ v
 reranker.py
  |
  v
 qdrant_store.py
 
 
-This module does not know about:
+Responsibilities:
+
+- convert normalized documents into semantic chunks;
+- preserve metadata;
+- prepare chunks for filtering and retrieval;
+- create Qdrant-ready payload structure.
+
+
+This module does NOT know about:
+
 - Exa API;
-- filtering logic;
 - embeddings;
-- reranking;
+- BM25;
 - Qdrant;
-- LLM.
+- reranking;
+- LLM;
+- compression.
 """
 
+
 from __future__ import annotations
+
 
 import logging
 import uuid
@@ -40,7 +53,10 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+from langchain_text_splitters import (
+    RecursiveCharacterTextSplitter,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -51,22 +67,19 @@ logger = logging.getLogger(__name__)
 # ==========================================================
 
 
-CHUNK_SIZE = 1000
+CHUNK_SIZE = 900
+
 
 CHUNK_OVERLAP = 150
 
 
-# Maximum amount of chunks generated
-# from a single Exa document.
-MAX_CHUNKS_PER_DOCUMENT = 20
+MAX_CHUNKS_PER_DOCUMENT = 30
 
 
-# Ignore extremely small fragments.
-MIN_CHUNK_LENGTH = 100
+MIN_CHUNK_LENGTH = 120
 
 
-# Prevent processing huge unexpected payloads.
-MAX_DOCUMENT_LENGTH = 100_000
+MAX_DOCUMENT_LENGTH = 150_000
 
 
 
@@ -82,12 +95,19 @@ _splitter = RecursiveCharacterTextSplitter(
     chunk_overlap=CHUNK_OVERLAP,
 
     separators=[
+
         "\n\n",
+
         "\n",
+
         ". ",
+
         " ",
+
         "",
+
     ],
+
 )
 
 
@@ -97,9 +117,9 @@ _splitter = RecursiveCharacterTextSplitter(
 # ==========================================================
 
 
-def _current_timestamp() -> int:
+def _timestamp() -> int:
     """
-    Return current UTC unix timestamp.
+    Current UTC timestamp.
     """
 
     return int(
@@ -110,28 +130,68 @@ def _current_timestamp() -> int:
 
 
 
-def _prepare_text(
+def _clean_text(
     text: str,
 ) -> str:
     """
-    Normalize document text before chunking.
+    Normalize document text.
     """
 
     if not text:
         return ""
 
-    return text.strip()
+
+    return (
+        text
+        .replace(
+            "\x00",
+            "",
+        )
+        .strip()
+    )
+
+
+
+def _create_document_id(
+    document: dict[str, Any],
+) -> str:
+    """
+    Create stable document identifier.
+    """
+
+    url = document.get(
+        "url",
+        "",
+    )
+
+
+    if url:
+
+        return str(
+            uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                url,
+            )
+        )
+
+
+    return str(
+        uuid.uuid4()
+    )
 
 
 
 def _create_chunk(
+    *,
     document: dict[str, Any],
+    document_id: str,
     text: str,
     index: int,
-    timestamp: int,
+    total_chunks: int,
+    created_at: int,
 ) -> dict[str, Any]:
     """
-    Create internal chunk representation.
+    Create normalized chunk payload.
     """
 
     return {
@@ -141,11 +201,7 @@ def _create_chunk(
         ),
 
 
-        "query": (
-            document.get(
-                "query"
-            )
-        ),
+        "document_id": document_id,
 
 
         "title": (
@@ -175,7 +231,25 @@ def _create_chunk(
         ),
 
 
+        "query": document.get(
+            "query"
+        ),
+
+
         "chunk_index": index,
+
+
+        "total_chunks": total_chunks,
+
+
+        "char_count": len(
+            text
+        ),
+
+
+        "word_count": len(
+            text.split()
+        ),
 
 
         "published_date": (
@@ -192,10 +266,10 @@ def _create_chunk(
         ),
 
 
-        "created_at": timestamp,
+        "created_at": created_at,
 
 
-        "last_access": timestamp,
+        "last_access": created_at,
 
     }
 
@@ -210,44 +284,61 @@ def chunk_documents(
     documents: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """
-    Convert raw Exa documents into semantic chunks.
+    Convert normalized documents into semantic chunks.
 
     Input:
 
-        Normalized Exa documents.
+    [
+        {
+            title,
+            url,
+            text,
+            metadata
+        }
+    ]
+
 
     Output:
 
-        Candidate chunks for filtering.
+    [
+        {
+            id,
+            document_id,
+            text,
+            metadata
+        }
+    ]
 
-    Pipeline:
 
-        Exa documents
-              |
-              v
-        semantic chunks
-              |
-              v
-        filter.py
+    These chunks are consumed by:
+
+        filter_chunks()
     """
 
-    timestamp = _current_timestamp()
+
+    if not documents:
+
+        return []
+
+
+
+    created_at = _timestamp()
 
 
     chunks: list[dict[str, Any]] = []
 
 
+
     for document in documents:
 
-        raw_text = (
-            document.get(
-                "text"
-            )
-            or ""
+
+        raw_text = document.get(
+            "text",
+            "",
         )
 
 
-        text = _prepare_text(
+        text = _clean_text(
             raw_text
         )
 
@@ -265,13 +356,17 @@ def chunk_documents(
         if len(text) > MAX_DOCUMENT_LENGTH:
 
             logger.warning(
-                "Document too large. Truncating. "
-                "title=%s length=%d",
+
+                "Document truncated. title=%s size=%d",
+
                 document.get(
                     "title"
                 ),
+
                 len(text),
+
             )
+
 
             text = text[
                 :MAX_DOCUMENT_LENGTH
@@ -279,60 +374,87 @@ def chunk_documents(
 
 
 
-        document_chunks = _splitter.split_text(
-            text
+        document_id = _create_document_id(
+            document
         )
 
 
 
-        created = 0
+        document_chunks = (
+            _splitter.split_text(
+                text
+            )
+        )
+
+
+
+        document_chunks = [
+
+            chunk.strip()
+
+            for chunk in document_chunks
+
+            if len(chunk.strip())
+            >=
+            MIN_CHUNK_LENGTH
+
+        ]
+
+
+
+        if not document_chunks:
+
+            continue
+
+
+
+        total_chunks = min(
+
+            len(document_chunks),
+
+            MAX_CHUNKS_PER_DOCUMENT,
+
+        )
+
 
 
         for index, chunk_text in enumerate(
-            document_chunks
+
+            document_chunks[:MAX_CHUNKS_PER_DOCUMENT]
+
         ):
-
-            chunk_text = chunk_text.strip()
-
-
-            if len(chunk_text) < MIN_CHUNK_LENGTH:
-
-                continue
-
 
 
             chunks.append(
+
                 _create_chunk(
+
                     document=document,
+
+                    document_id=document_id,
+
                     text=chunk_text,
+
                     index=index,
-                    timestamp=timestamp,
+
+                    total_chunks=total_chunks,
+
+                    created_at=created_at,
+
                 )
+
             )
-
-
-            created += 1
-
-
-
-            if created >= MAX_CHUNKS_PER_DOCUMENT:
-
-                logger.debug(
-                    "Chunk limit reached for document. "
-                    "title=%s",
-                    document.get(
-                        "title"
-                    ),
-                )
-
-                break
 
 
 
     logger.info(
-        "Created %d chunks from %d Exa documents.",
+
+        "Created %d chunks from %d documents.",
+
         len(chunks),
+
         len(documents),
+
     )
 
 
