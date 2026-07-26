@@ -1,39 +1,35 @@
 """
 Final context optimization layer.
 
-Responsible for:
-- preparing compressed chunks for LLM;
-- controlling context size;
-- preserving citation metadata;
-- ordering information by relevance.
-
 Pipeline position:
 
-Exa
- |
- v
-chunker.py
- |
- v
-filter.py
- |
- v
-embedding_retrieval.py
- |
- v
-reranker.py
- |
- v
-compression.py
- |
- v
-context_optimizer.py
- |
- v
+Ranked chunks
+        |
+        v
+Compression
+        |
+        v
+Context optimization
+        |
+        v
 AgentContext
+        |
+        +----------------+
+        |                |
+        v                v
+    Groq LLM        Citations
 
 
-This module does NOT:
+Responsibilities:
+
+- prepare LLM context;
+- control context size;
+- preserve citations;
+- create final source mapping.
+
+
+Does NOT:
+
 - call LLM;
 - call Exa;
 - generate embeddings;
@@ -51,6 +47,8 @@ from typing import Any
 
 from web_search.models import (
     AgentContext,
+    ContextDocument,
+    OptimizedContext,
     Source,
 )
 
@@ -58,136 +56,189 @@ from web_search.models import (
 logger = logging.getLogger(__name__)
 
 
-
 # ==========================================================
 # Configuration
 # ==========================================================
 
 
-# Approximate final context budget.
-#
-# Controlled because:
-# - Groq context window;
-# - latency;
-# - token cost.
-#
-
 MAX_CONTEXT_CHARS = 12000
-
 
 MAX_SOURCES = 5
 
+CHARS_PER_TOKEN = 4
+
 
 
 # ==========================================================
-# Text utilities
+# Utilities
 # ==========================================================
 
 
-def _trim_text(
+def _estimate_tokens(
     text: str,
-    limit: int,
-) -> str:
+) -> int:
     """
-    Trim text safely.
+    Approximate token count.
     """
 
     if not text:
+        return 0
 
-        return ""
-
-
-    if len(text) <= limit:
-
-        return text
-
-
-    return (
-        text[:limit]
-        +
-        "..."
+    return max(
+        1,
+        len(text) // CHARS_PER_TOKEN,
     )
 
-
-
-# ==========================================================
-# Chunk processing
-# ==========================================================
 
 
 def _sort_chunks(
     chunks: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """
-    Sort compressed chunks by relevance.
+    Sort by final relevance.
 
     Priority:
 
-    1. rerank score
-    2. embedding score
-    3. filter score
+    1. rerank_score
+    2. similarity_score
+    3. filter_score
     """
 
-
     return sorted(
-
         chunks,
+        key=lambda chunk: (
 
-        key=lambda chunk:
+            chunk.get(
+                "rerank_score",
+                0,
+            )
 
-            (
+            or
 
-                chunk.get(
-                    "rerank_score",
-                    0,
-                )
+            chunk.get(
+                "similarity_score",
+                0,
+            )
 
-                or
+            or
 
-                chunk.get(
-                    "similarity_score",
-                    0,
-                )
+            chunk.get(
+                "embedding_score",
+                0,
+            )
 
-                or
+            or
 
-                chunk.get(
-                    "filter_score",
-                    0,
-                )
+            chunk.get(
+                "filter_score",
+                0,
+            )
 
-                or 0
+            or 0
 
-            ),
-
+        ),
         reverse=True,
+    )
+
+
+
+def _build_source(
+    chunk: dict[str, Any],
+) -> Source:
+    """
+    Create citation source model.
+    """
+
+    return Source(
+
+        title=(
+            chunk.get(
+                "title"
+            )
+            or
+            "Untitled source"
+        ),
+
+        url=(
+            chunk.get(
+                "url"
+            )
+            or
+            ""
+        ),
+
+        provider=chunk.get(
+            "provider"
+        ),
+
+        author=chunk.get(
+            "author"
+        ),
+
+        published_date=chunk.get(
+            "published_date"
+        ),
 
     )
 
 
 
-def _build_context_text(
+def _extract_sources(
     chunks: list[dict[str, Any]],
-) -> str:
+) -> list[Source]:
     """
-    Build final LLM context.
-
-    Keeps source separation.
+    Extract unique citation sources.
     """
 
+    sources: list[Source] = []
 
-    sections: list[str] = []
-
-
-    current_size = 0
+    seen_urls: set[str] = set()
 
 
+    for chunk in chunks:
 
-    for index, chunk in enumerate(
-        chunks,
-        start=1,
-    ):
+        source = _build_source(
+            chunk
+        )
 
+
+        if not source.url:
+            continue
+
+
+        if source.url in seen_urls:
+            continue
+
+
+        seen_urls.add(
+            source.url
+        )
+
+
+        sources.append(
+            source
+        )
+
+
+        if len(sources) >= MAX_SOURCES:
+            break
+
+
+    return sources
+
+
+
+def _build_context_documents(
+    chunks: list[dict[str, Any]],
+) -> list[ContextDocument]:
+    """
+    Convert chunks into final context documents.
+    """
+
+    documents: list[ContextDocument] = []
+
+
+    for chunk in chunks:
 
         text = (
 
@@ -199,152 +250,27 @@ def _build_context_text(
 
             chunk.get(
                 "text",
-                "",
+                ""
             )
 
         )
 
 
         if not text:
-
             continue
 
 
+        documents.append(
 
-        title = (
+            ContextDocument(
 
-            chunk.get(
-                "title"
-            )
+                text=text,
 
-            or
-
-            "Untitled source"
-
-        )
-
-
-        section = f"""
-SOURCE [{index}]
-
-Title:
-{title}
-
-Content:
-{text.strip()}
-"""
-
-
-        section_size = len(
-            section
-        )
-
-
-
-        if (
-
-            current_size
-            +
-            section_size
-            >
-            MAX_CONTEXT_CHARS
-
-        ):
-
-            break
-
-
-
-        sections.append(
-            section
-        )
-
-
-        current_size += section_size
-
-
-
-    return "\n\n".join(
-        sections
-    ).strip()
-
-
-
-# ==========================================================
-# Sources
-# ==========================================================
-
-
-def _extract_sources(
-    chunks: list[dict[str, Any]],
-) -> list[Source]:
-    """
-    Create citation metadata.
-
-    Keeps unique URLs.
-    """
-
-
-    sources: list[Source] = []
-
-
-    seen_urls: set[str] = set()
-
-
-
-    for chunk in chunks:
-
-
-        url = chunk.get(
-            "url",
-            "",
-        )
-
-
-        if not url:
-
-            continue
-
-
-
-        if url in seen_urls:
-
-            continue
-
-
-
-        seen_urls.add(
-            url
-        )
-
-
-
-        sources.append(
-
-            Source(
-
-                title=(
-
-                    chunk.get(
-                        "title"
-                    )
-
-                    or
-
-                    "Untitled source"
-
+                source=_build_source(
+                    chunk
                 ),
 
-
-                url=url,
-
-
-                provider=chunk.get(
-                    "provider"
-                ),
-
-
-                score=(
+                relevance_score=(
 
                     chunk.get(
                         "rerank_score"
@@ -362,16 +288,8 @@ def _extract_sources(
                         "filter_score"
                     )
 
-                ),
+                    or 0.0
 
-
-                published_date=chunk.get(
-                    "published_date"
-                ),
-
-
-                author=chunk.get(
-                    "author"
                 ),
 
             )
@@ -379,14 +297,79 @@ def _extract_sources(
         )
 
 
+    return documents
 
-        if len(sources) >= MAX_SOURCES:
 
+
+def _build_llm_text(
+    documents: list[ContextDocument],
+) -> str:
+    """
+    Build final text context.
+    """
+
+    sections: list[str] = []
+
+    current_length = 0
+
+
+    for index, document in enumerate(
+        documents,
+        start=1,
+    ):
+
+        section = f"""
+SOURCE [{index}]
+
+Title:
+{document.source.title}
+
+Content:
+{document.text}
+
+URL:
+{document.source.url}
+"""
+
+
+        size = len(section)
+
+
+        if (
+            current_length + size
+            >
+            MAX_CONTEXT_CHARS
+        ):
             break
 
 
+        sections.append(
+            section.strip()
+        )
 
-    return sources
+
+        current_length += size
+
+
+    return "\n\n".join(
+        sections
+    )
+
+
+
+def _build_citation_map(
+    sources: list[Source],
+) -> dict[str, Source]:
+    """
+    Create source lookup map.
+    """
+
+    return {
+        str(index + 1): source
+        for index, source in enumerate(
+            sources
+        )
+    }
 
 
 
@@ -396,54 +379,34 @@ def _extract_sources(
 
 
 def optimize_context(
+    query: str,
     chunks: list[dict[str, Any]],
 ) -> AgentContext:
     """
-    Prepare final context for agent.
+    Prepare final agent context.
 
     Input:
 
-        Compressed reranked chunks
+        compressed ranked chunks
 
 
     Output:
 
         AgentContext
-
-
-    Example:
-
-        [
-            {
-                "title": "...",
-                "url": "...",
-                "compressed_text": "...",
-                "rerank_score": 0.91
-            }
-        ]
-
-    Returns:
-
-        AgentContext(
-            text="...",
-            sources=[...]
-        )
     """
-
 
     if not chunks:
 
         logger.warning(
-            "No chunks provided for context optimization."
+            "No chunks provided."
         )
-
 
         return AgentContext()
 
 
 
     logger.info(
-        "Optimizing context from %d chunks.",
+        "Optimizing context chunks=%d",
         len(chunks),
     )
 
@@ -454,11 +417,9 @@ def optimize_context(
     )
 
 
-
-    context_text = _build_context_text(
+    documents = _build_context_documents(
         ranked_chunks
     )
-
 
 
     sources = _extract_sources(
@@ -466,15 +427,33 @@ def optimize_context(
     )
 
 
+    context_text = _build_llm_text(
+        documents
+    )
+
+
+    optimized = OptimizedContext(
+
+        query=query,
+
+        documents=documents,
+
+        total_tokens=_estimate_tokens(
+            context_text
+        ),
+
+        citation_map=_build_citation_map(
+            sources
+        ),
+
+    )
+
 
     logger.info(
-
-        "Context optimized. chars=%d sources=%d",
-
+        "Context optimized chars=%d sources=%d tokens=%d",
         len(context_text),
-
         len(sources),
-
+        optimized.total_tokens,
     )
 
 
@@ -484,5 +463,7 @@ def optimize_context(
         text=context_text,
 
         sources=sources,
+
+        optimized_context=optimized,
 
     )
