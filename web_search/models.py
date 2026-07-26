@@ -406,3 +406,22 @@ class AgentContext(BaseModel):
 
 
     optimized_context: OptimizedContext | None = None
+
+
+
+class SearchQuery(BaseModel):
+    """
+    Normalized user query used throughout the retrieval pipeline.
+    """
+
+    original: str
+
+    normalized: str
+
+    language: str
+
+    intent: str
+
+    expanded_queries: list[str] = Field(
+        default_factory=list,
+    )
