@@ -1,53 +1,104 @@
 """
 Web search domain models.
 
-Contracts between:
+Architecture contract:
 
-Exa retrieval
-      |
-      v
-Document normalization
-      |
-      v
-Chunking
-      |
-      v
-Filtering
-      |
-      v
-Embedding retrieval
-      |
-      v
-Reranking
-      |
-      v
-Compression
-      |
-      v
-Context optimization
-      |
-      v
-Agent
+User Query
+    |
+    v
+Query Preprocessing
+    |
+    v
+Qdrant Hybrid Retrieval
+    |
+    +---------------- Cache Hit
+    |
+    +---------------- Cache Miss
+                         |
+                         v
+                    Exa Search
+                         |
+                         v
+                Document Normalize
+                         |
+                         v
+                      Chunking
+                         |
+                         v
+                      Filtering
+                         |
+                         v
+              Embedding Similarity
+                         |
+                         v
+                  Cloudflare Reranker
+                         |
+                         v
+              Extractive Compression
+                         |
+                         v
+              Context Optimization
+                         |
+                         v
+                    AgentContext
+
 
 This module contains only:
-- data models;
-- pipeline contracts.
 
-No:
-- API calls;
-- storage logic;
-- ranking logic;
-- business rules.
+- pipeline data contracts;
+- validation models;
+- shared field definitions.
+
+This module does NOT:
+
+- call external APIs;
+- contain ranking logic;
+- contain storage logic;
+- contain retrieval logic;
+- contain business rules.
 """
 
 from __future__ import annotations
 
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
 # ==========================================================
-# Source
+# Query
+# ==========================================================
+
+
+class SearchQuery(BaseModel):
+    """
+    Normalized user query.
+
+    Produced by:
+
+        query_preprocessor.py
+
+    Used by:
+
+        retrieval pipeline
+    """
+
+    original: str
+
+    normalized: str
+
+    language: str = "en"
+
+    intent: str = "general"
+
+    expanded_queries: list[str] = Field(
+        default_factory=list
+    )
+
+
+# ==========================================================
+# Source metadata
 # ==========================================================
 
 
@@ -56,153 +107,119 @@ class Source(BaseModel):
     External citation source.
 
     Used by:
-    - UI;
-    - agent;
-    - citations.
+
+    - UI
+    - Agent
+    - Citations
     """
 
-    title: str = Field(
-        default="Untitled source"
-    )
+    title: str = "Untitled source"
 
-    url: str = Field(
-        default=""
-    )
+    url: str = ""
 
-    provider: str | None = Field(
-        default=None
-    )
+    provider: str | None = None
 
-    author: str | None = Field(
-        default=None
-    )
+    author: str | None = None
 
-    published_date: str | None = Field(
-        default=None
-    )
+    published_date: str | None = None
 
 
 
 # ==========================================================
-# Exa document
+# Documents
 # ==========================================================
 
 
 class WebDocument(BaseModel):
     """
-    Normalized document from Exa.
+    Normalized external document.
 
-    Stage:
+    Produced by:
 
         Exa
-          |
-          v
-        WebDocument
+
+    Consumed by:
+
+        chunker.py
     """
 
     query: str
 
+    title: str = "Untitled"
 
-    title: str = Field(
-        default="Untitled"
-    )
+    url: str = ""
 
+    text: str = ""
 
-    url: str = Field(
-        default=""
-    )
-
-
-    text: str = Field(
-        default=""
-    )
-
-
-    provider: str = Field(
-        default="exa"
-    )
-
+    provider: str = "exa"
 
     author: str | None = None
-
 
     published_date: str | None = None
 
 
 
 # ==========================================================
-# Chunk
+# Base chunk
 # ==========================================================
 
 
 class DocumentChunk(BaseModel):
     """
-    Semantic text chunk.
+    Atomic retrieval unit.
 
-    Created by chunker.py.
+    Produced by:
 
-    Contains original metadata.
+        chunker.py
+
+
+    Contains all persistent metadata.
     """
-
 
     id: str
 
-
     query: str
 
-
-    title: str = (
-        "Untitled"
-    )
-
+    title: str = "Untitled"
 
     url: str = ""
 
-
     text: str
 
-
-    provider: str = (
-        "exa"
-    )
-
+    provider: str = "exa"
 
     chunk_index: int = 0
 
-
     author: str | None = None
-
 
     published_date: str | None = None
 
 
-    created_at: int | None = None
+    # Unix timestamps.
 
+    created_at: int | None = None
 
     last_access: int | None = None
 
 
 
 # ==========================================================
-# Filtered chunk
+# Filtering
 # ==========================================================
 
 
-class FilteredChunk(
-    DocumentChunk
-):
+class FilteredChunk(DocumentChunk):
     """
     Chunk after heuristic filtering.
 
-    filter.py output.
+    Produced by:
 
-    Ranking signals:
+        filter.py
 
-    - keyword relevance
-    - quality
-    - duplication
+    Added:
+
+        filter_score
     """
-
 
     filter_score: float = 0.0
 
@@ -213,31 +230,20 @@ class FilteredChunk(
 # ==========================================================
 
 
-class EmbeddingResult(
-    FilteredChunk
-):
+class EmbeddingChunk(FilteredChunk):
     """
     Chunk after dense similarity retrieval.
 
-    embedding_retrieval.py output.
+    Produced by:
 
-    Used after:
+        embedding_retrieval.py
 
-        filter_chunks()
+    Added:
 
-        TOP 10
-
-            |
-
-        embedding similarity
-
-            |
-
-        TOP 5-8
+        embedding_score
     """
 
-
-    similarity_score: float = 0.0
+    embedding_score: float = 0.0
 
 
 
@@ -246,47 +252,41 @@ class EmbeddingResult(
 # ==========================================================
 
 
-class HybridSearchResult(
-    DocumentChunk
-):
+class HybridChunk(DocumentChunk):
     """
-    Result returned by Qdrant hybrid retrieval.
+    Chunk returned from Qdrant hybrid retrieval.
 
     Contains:
 
-    Dense vector score
-    +
-    BM25 sparse score
-    +
-    fusion score
+    - dense score
+    - sparse score
+    - fusion score
     """
-
 
     dense_score: float = 0.0
 
-
     sparse_score: float = 0.0
-
 
     fusion_score: float = 0.0
 
 
 
 # ==========================================================
-# Ranked chunk
+# Reranking
 # ==========================================================
 
 
-class RankedChunk(
-    EmbeddingResult
-):
+class RankedChunk(EmbeddingChunk):
     """
-    Final ranking output.
+    Chunk after Cloudflare reranker.
 
     Produced by:
 
-        Cloudflare reranker
+        reranker.py
 
+    Added:
+
+        rerank_score
     """
 
     rerank_score: float = 0.0
@@ -298,56 +298,45 @@ class RankedChunk(
 # ==========================================================
 
 
-class CompressedChunk(
-    RankedChunk
-):
+class CompressedChunk(RankedChunk):
     """
     Chunk after extractive compression.
 
-    compression.py output.
+    Produced by:
 
-
-    Original:
-
-        1200 tokens
-
-
-    Compressed:
-
-        200-300 tokens
+        compression.py
 
 
     Keeps:
-    - relevance;
-    - citation metadata.
+
+    - source metadata
+    - ranking scores
+    - compressed text
     """
 
-
     compressed_text: str = ""
-
 
     compression_ratio: float = 1.0
 
 
 
 # ==========================================================
-# Context optimization
+# Optimized context
 # ==========================================================
 
 
 class ContextDocument(BaseModel):
     """
-    Final optimized context unit.
+    Final context document for LLM.
 
-    Prepared before LLM generation.
+    Prepared by:
+
+        context_optimizer.py
     """
-
 
     text: str
 
-
     source: Source
-
 
     relevance_score: float = 0.0
 
@@ -355,22 +344,18 @@ class ContextDocument(BaseModel):
 
 class OptimizedContext(BaseModel):
     """
-    Final context package.
+    Final structured context package.
 
-    Sent to Groq LLM.
+    Used before LLM generation.
     """
 
-
     query: str
-
 
     documents: list[ContextDocument] = Field(
         default_factory=list
     )
 
-
     total_tokens: int = 0
-
 
     citation_map: dict[str, Source] = Field(
         default_factory=dict
@@ -385,43 +370,78 @@ class OptimizedContext(BaseModel):
 
 class AgentContext(BaseModel):
     """
-    Context consumed by agent layer.
+    Final context consumed by agent layer.
 
     Contains:
 
-    text:
-        LLM-ready context.
-
-    sources:
-        citations for UI.
+    - LLM-ready text
+    - citation sources
+    - optional structured context
     """
 
-
     text: str = ""
-
 
     sources: list[Source] = Field(
         default_factory=list
     )
 
-
     optimized_context: OptimizedContext | None = None
 
 
 
-class SearchQuery(BaseModel):
+# ==========================================================
+# Generic pipeline helpers
+# ==========================================================
+
+
+class EmbeddingResult(BaseModel):
     """
-    Normalized user query used throughout the retrieval pipeline.
+    Generic embedding response contract.
+
+    Used only when raw vectors need transport.
     """
 
-    original: str
+    vector: list[float]
 
-    normalized: str
 
-    language: str
 
-    intent: str
+class RerankResult(BaseModel):
+    """
+    Generic reranker result contract.
+    """
 
-    expanded_queries: list[str] = Field(
-        default_factory=list,
-    )
+    score: float
+
+    index: int
+
+
+
+class ChunkScore(BaseModel):
+    """
+    Shared ranking score container.
+    """
+
+    filter_score: float | None = None
+
+    embedding_score: float | None = None
+
+    rerank_score: float | None = None
+
+
+
+# ==========================================================
+# Compatibility helper
+# ==========================================================
+
+
+def model_to_dict(
+    model: BaseModel,
+) -> dict[str, Any]:
+    """
+    Unified model serialization.
+
+    Prevents direct dictionary construction
+    across pipeline modules.
+    """
+
+    return model.model_dump()
