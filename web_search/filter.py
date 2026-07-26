@@ -1,44 +1,59 @@
 """
-Chunk-level filtering layer.
-
-Responsibilities:
-- remove low quality chunks;
-- score chunks using cheap heuristics;
-- select best chunks before reranking.
+Chunk quality filtering layer.
 
 Pipeline position:
 
 Exa
  |
  v
-chunker.py
+Document normalize
+ |
+ v
+Chunker
  |
  v
 filter.py
  |
  v
-reranker.py
+Embedding similarity
  |
  v
-qdrant_store.py
+Cloudflare reranker
+ |
+ v
+Qdrant
 
 
-This module does not know about:
-- Exa API;
+Responsibilities:
+
+- remove bad chunks;
+- remove duplicates;
+- apply cheap relevance scoring;
+- reduce candidate pool before embeddings.
+
+
+This module does NOT know about:
+
 - embeddings;
-- reranking models;
 - Qdrant;
-- LLM.
+- BM25;
+- reranking;
+- LLM;
+- compression.
 """
+
 
 from __future__ import annotations
 
+
 import logging
 import re
+
 from typing import Any
 
 
 logger = logging.getLogger(__name__)
+
 
 
 # ==========================================================
@@ -46,16 +61,21 @@ logger = logging.getLogger(__name__)
 # ==========================================================
 
 
-MIN_CHUNK_LENGTH = 200
+MAX_OUTPUT_CHUNKS = 10
 
-MAX_CHUNKS = 10
 
-MIN_SCORE = 0.25
+MIN_TEXT_LENGTH = 200
+
+
+MIN_WORDS = 40
+
+
+MIN_SCORE = 0.30
 
 
 
 # ==========================================================
-# Text utilities
+# Text processing
 # ==========================================================
 
 
@@ -63,22 +83,26 @@ def _normalize_text(
     text: str,
 ) -> str:
     """
-    Normalize text for keyword comparison.
+    Normalize text for lexical comparison.
     """
 
     return re.sub(
+
         r"[^a-zA-Zа-яА-Я0-9 ]+",
+
         " ",
+
         text.lower(),
+
     )
 
 
 
-def _tokenize(
+def _tokens(
     text: str,
 ) -> set[str]:
     """
-    Extract meaningful words.
+    Extract meaningful tokens.
     """
 
     words = _normalize_text(
@@ -87,9 +111,13 @@ def _tokenize(
 
 
     return {
+
         word
+
         for word in words
+
         if len(word) > 2
+
     }
 
 
@@ -99,73 +127,71 @@ def _tokenize(
 # ==========================================================
 
 
-def _keyword_score(
+def _query_overlap_score(
     query: str,
     chunk: dict[str, Any],
 ) -> float:
     """
-    Calculate query/chunk keyword relevance.
+    Cheap lexical relevance.
+
+    Used only as pre-filter signal.
     """
 
-    query_words = _tokenize(
+    query_tokens = _tokens(
         query
     )
 
 
-    if not query_words:
+    if not query_tokens:
         return 0.0
 
 
-    title_words = _tokenize(
+
+    text = (
+
         chunk.get(
             "title",
-            "",
+            ""
         )
-    )
 
+        +
 
-    text_words = _tokenize(
+        " "
+
+        +
+
         chunk.get(
             "text",
-            "",
+            ""
         )
+
     )
 
 
-    title_match = len(
-        query_words & title_words
+    chunk_tokens = _tokens(
+        text
     )
 
 
-    text_match = len(
-        query_words & text_words
-    )
+    overlap = (
 
+        len(
+            query_tokens
+            &
+            chunk_tokens
+        )
 
-    score = 0.0
-
-
-    # Title contains strong relevance signal.
-    score += (
-        title_match
         /
-        len(query_words)
-        *
-        0.5
-    )
 
+        len(
+            query_tokens
+        )
 
-    score += (
-        text_match
-        /
-        len(query_words)
-        *
-        0.5
     )
 
 
     return min(
-        score,
+        overlap,
         1.0,
     )
 
@@ -175,7 +201,7 @@ def _quality_score(
     chunk: dict[str, Any],
 ) -> float:
     """
-    Estimate chunk information quality.
+    Estimate information quality.
     """
 
     text = chunk.get(
@@ -184,13 +210,18 @@ def _quality_score(
     )
 
 
-    length = len(
-        text
-    )
+    if len(text) < MIN_TEXT_LENGTH:
 
-
-    if length < MIN_CHUNK_LENGTH:
         return 0.0
+
+
+
+    words = text.split()
+
+
+    if len(words) < MIN_WORDS:
+
+        return 0.2
 
 
 
@@ -198,30 +229,34 @@ def _quality_score(
 
 
 
-    words = _tokenize(
-        text
+    unique_ratio = (
+
+        len(
+            set(
+                words
+            )
+        )
+
+        /
+
+        max(
+            len(words),
+            1,
+        )
+
     )
 
 
-    # Penalize chunks with little information.
-    if len(words) < 30:
+
+    if unique_ratio < 0.35:
+
         score -= 0.3
 
 
 
-    # Penalize excessive repetition.
-    unique_ratio = (
-        len(words)
-        /
-        max(
-            len(text.split()),
-            1,
-        )
-    )
+    if len(text) > 5000:
 
-
-    if unique_ratio < 0.4:
-        score -= 0.2
+        score -= 0.1
 
 
 
@@ -232,33 +267,38 @@ def _quality_score(
 
 
 
-def _position_score(
+def _metadata_score(
     chunk: dict[str, Any],
 ) -> float:
     """
-    Prefer early chunks from a document.
-
-    First chunks usually contain:
-    - introduction;
-    - definitions;
-    - main topic context.
+    Score metadata completeness.
     """
 
-    index = chunk.get(
-        "chunk_index",
-        0,
-    )
+    score = 0.0
 
 
-    if index == 0:
-        return 1.0
+    if chunk.get(
+        "title"
+    ):
+
+        score += 0.4
 
 
-    if index <= 2:
-        return 0.8
+    if chunk.get(
+        "url"
+    ):
+
+        score += 0.4
 
 
-    return 0.5
+    if chunk.get(
+        "document_id"
+    ):
+
+        score += 0.2
+
+
+    return score
 
 
 
@@ -267,31 +307,38 @@ def _calculate_score(
     chunk: dict[str, Any],
 ) -> float:
     """
-    Combined chunk relevance score.
+    Combined pre-filter score.
     """
 
-    keyword = _keyword_score(
+
+    relevance = _query_overlap_score(
         query,
         chunk,
     )
 
 
     quality = _quality_score(
-        chunk,
+        chunk
     )
 
 
-    position = _position_score(
-        chunk,
+    metadata = _metadata_score(
+        chunk
     )
 
 
     return (
-        keyword * 0.6
+
+        relevance * 0.5
+
         +
-        quality * 0.3
+
+        quality * 0.35
+
         +
-        position * 0.1
+
+        metadata * 0.15
+
     )
 
 
@@ -301,37 +348,47 @@ def _calculate_score(
 # ==========================================================
 
 
-def _remove_duplicates(
+def _deduplicate(
     chunks: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """
-    Remove identical chunks.
+    Remove duplicate chunks.
     """
 
     result = []
 
-    seen_texts: set[str] = set()
+
+    seen: set[str] = set()
+
 
 
     for chunk in chunks:
 
-        text = (
-            chunk.get(
-                "text",
-                "",
-            )
-            .strip()
+
+        text = chunk.get(
+            "text",
+            "",
         )
 
 
-        fingerprint = text[:300]
+        fingerprint = (
+
+            text[:500]
+
+            .strip()
+
+            .lower()
+
+        )
 
 
-        if fingerprint in seen_texts:
+        if fingerprint in seen:
+
             continue
 
 
-        seen_texts.add(
+
+        seen.add(
             fingerprint
         )
 
@@ -355,7 +412,7 @@ def filter_chunks(
     query: str,
 ) -> list[dict[str, Any]]:
     """
-    Filter and rank chunks before reranking.
+    Filter semantic chunks.
 
     Input:
 
@@ -364,84 +421,111 @@ def filter_chunks(
 
     Output:
 
-        candidate chunks for reranker.py
+        TOP 10 candidate chunks
+
+
+    Next stage:
+
+        embedding similarity
     """
 
+    if not chunks:
+
+        return []
+
+
+
     logger.info(
+
         "Filtering %d chunks.",
+
         len(chunks),
+
     )
 
 
-    chunks = _remove_duplicates(
+
+    chunks = _deduplicate(
         chunks
     )
 
 
-    scored_chunks: list[
-        tuple[float, dict[str, Any]]
+
+    scored: list[
+        tuple[
+            float,
+            dict[str, Any]
+        ]
     ] = []
+
 
 
     for chunk in chunks:
 
+
         score = _calculate_score(
+
             query,
+
             chunk,
+
         )
 
-
-        logger.debug(
-            "Chunk score %.3f title=%s index=%s",
-            score,
-            chunk.get(
-                "title"
-            ),
-            chunk.get(
-                "chunk_index"
-            ),
-        )
 
 
         if score < MIN_SCORE:
+
             continue
+
 
 
         chunk["filter_score"] = score
 
 
-        scored_chunks.append(
+
+        scored.append(
+
             (
                 score,
+
                 chunk,
+
             )
+
         )
 
 
 
-    scored_chunks.sort(
-        key=lambda item: item[0],
+    scored.sort(
+
+        key=lambda item:
+            item[0],
+
         reverse=True,
+
     )
 
 
 
-    selected = [
+    result = [
 
         chunk
 
         for _, chunk
 
-        in scored_chunks[:MAX_CHUNKS]
+        in scored[:MAX_OUTPUT_CHUNKS]
 
     ]
 
 
 
     logger.info(
+
         "Selected %d chunks after filtering.",
-        len(selected),
+
+        len(result),
+
     )
 
 
-    return selected
+    return result
