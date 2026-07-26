@@ -1,35 +1,48 @@
 """
-Cloudflare Workers AI reranker.
+Cloudflare Workers AI reranker layer.
 
-Responsible for:
-- semantic reranking of filtered web chunks;
-- dynamic batching for Cloudflare token limits;
-- reducing candidate chunks before Qdrant storage.
+Baseline architecture v1:
 
-Pipeline:
+Embedding similarity
+        |
+        v
+TOP 5-8 chunks
+        |
+        v
+Cloudflare reranker
+        |
+        v
+TOP 3-5 chunks
+        |
+        v
+Extractive compression
 
-Exa
- ↓
-chunker.py
- ↓
-filter.py
- ↓
-reranker.py
- ↓
-qdrant_store.py
 
+Responsibilities:
 
-Uses:
-@cf/baai/bge-reranker-base
+- semantic reranking;
+- deep relevance scoring;
+- reducing candidate chunks.
+
+Does NOT:
+
+- retrieve documents;
+- generate embeddings;
+- compress context;
+- store data;
+- format LLM context.
 """
 
 from __future__ import annotations
+
 
 import logging
 import os
 from typing import Any
 
+
 import httpx
+
 
 from tenacity import (
     retry,
@@ -42,55 +55,60 @@ from tenacity import (
 logger = logging.getLogger(__name__)
 
 
+
 # ==========================================================
 # Configuration
 # ==========================================================
 
-REQUEST_TIMEOUT = 60.0
 
-
-RERANK_MODEL = (
-    "@cf/baai/bge-reranker-base"
+REQUEST_TIMEOUT = float(
+    os.getenv(
+        "CF_RERANK_TIMEOUT",
+        "60",
+    )
 )
 
 
-# Conservative limit.
-# Includes:
-# query tokens
-# +
-# contexts tokens
-MAX_RERANK_TOKENS = 450
+RERANK_MODEL = os.getenv(
+    "CF_RERANK_MODEL",
+    "@cf/baai/bge-reranker-base",
+)
 
 
-# Approximation:
-# multilingual average.
-#
-# 1 token ≈ 4 characters
-#
-# Conservative because
-# CJK languages tokenize worse.
-CHARS_PER_TOKEN = 4
+RERANK_TOP_K = int(
+    os.getenv(
+        "RERANK_TOP_K",
+        "5",
+    )
+)
+
 
 
 CF_ACCOUNT_ID = os.getenv(
     "CF_ACCOUNT_ID"
 )
 
+
 CF_API_TOKEN = os.getenv(
     "CF_API_TOKEN"
 )
 
 
+
 if not CF_ACCOUNT_ID:
+
     raise RuntimeError(
-        "Environment variable CF_ACCOUNT_ID is not configured."
+        "CF_ACCOUNT_ID is not configured."
     )
+
 
 
 if not CF_API_TOKEN:
+
     raise RuntimeError(
-        "Environment variable CF_API_TOKEN is not configured."
+        "CF_API_TOKEN is not configured."
     )
+
 
 
 API_URL = (
@@ -101,8 +119,21 @@ API_URL = (
 
 
 # ==========================================================
-# Client
+# Exceptions
 # ==========================================================
+
+
+class CloudflareRerankerError(Exception):
+    """
+    Cloudflare reranker API error.
+    """
+
+
+
+# ==========================================================
+# HTTP Client
+# ==========================================================
+
 
 _client: httpx.AsyncClient | None = None
 
@@ -110,16 +141,18 @@ _client: httpx.AsyncClient | None = None
 
 def get_http_client() -> httpx.AsyncClient:
     """
-    Lazily initialize Cloudflare HTTP client.
+    Singleton async HTTP client.
     """
 
+
     global _client
+
 
 
     if _client is None:
 
         logger.info(
-            "Initializing Cloudflare reranker client."
+            "Initializing Cloudflare reranker HTTP client."
         )
 
 
@@ -139,8 +172,6 @@ def get_http_client() -> httpx.AsyncClient:
 
             },
 
-            follow_redirects=True,
-
         )
 
 
@@ -148,165 +179,147 @@ def get_http_client() -> httpx.AsyncClient:
 
 
 
-# ==========================================================
-# Exceptions
-# ==========================================================
-
-
-class CloudflareRerankerError(Exception):
-    """
-    Cloudflare Workers AI reranker error.
-    """
-
-
 
 # ==========================================================
-# Token estimation
+# Response parsing
 # ==========================================================
 
 
-def _estimate_tokens(
-    text: str,
-) -> int:
+def _extract_scores(
+    payload: dict[str, Any],
+) -> list[float]:
     """
-    Estimate token count.
+    Extract scores from Cloudflare response.
 
-    Used only for batching.
+    Supports possible API formats:
+
+    {
+        result:
+        {
+            scores:[]
+        }
+    }
+
+
+    or:
+
+
+    {
+        result:
+        {
+            data:[]
+        }
+    }
     """
 
-    if not text:
-        return 0
 
 
-    return max(
-        1,
-        len(text)
-        //
-        CHARS_PER_TOKEN,
+    result = payload.get(
+        "result",
+        {},
     )
 
 
 
-# ==========================================================
-# Dynamic batching
-# ==========================================================
+    if not isinstance(
+        result,
+        dict,
+    ):
 
-
-def _create_batches(
-    query: str,
-    chunks: list[dict[str, Any]],
-) -> list[list[dict[str, Any]]]:
-    """
-    Split chunks into Cloudflare-safe batches.
-
-    Keeps total estimated tokens
-    below MAX_RERANK_TOKENS.
-    """
-
-
-    query_tokens = _estimate_tokens(
-        query
-    )
-
-
-    available_tokens = (
-        MAX_RERANK_TOKENS
-        -
-        query_tokens
-    )
-
-
-    batches: list[
-        list[dict[str, Any]]
-    ] = []
-
-
-    current_batch: list[
-        dict[str, Any]
-    ] = []
-
-
-    current_tokens = 0
-
-
-
-    for chunk in chunks:
-
-
-        text = chunk.get(
-            "text",
-            "",
+        raise CloudflareRerankerError(
+            "Missing reranker result."
         )
 
 
-        chunk_tokens = _estimate_tokens(
-            text
+
+    raw_scores = (
+
+        result.get(
+            "scores"
+        )
+
+        or
+
+        result.get(
+            "data"
+        )
+
+    )
+
+
+
+    if not isinstance(
+        raw_scores,
+        list,
+    ):
+
+        raise CloudflareRerankerError(
+            "Invalid reranker scores format."
         )
 
 
-        if (
 
-            current_batch
+    scores: list[float] = []
 
-            and
 
-            current_tokens
-            +
-            chunk_tokens
-            >
-            available_tokens
 
+    for item in raw_scores:
+
+
+        if isinstance(
+            item,
+            (float, int),
         ):
 
-
-            batches.append(
-                current_batch
+            scores.append(
+                float(item)
             )
 
 
-            current_batch = []
-
-            current_tokens = 0
-
-
-
-        current_batch.append(
-            chunk
-        )
+        elif isinstance(
+            item,
+            dict,
+        ):
 
 
-        current_tokens += chunk_tokens
+            value = (
+
+                item.get(
+                    "score"
+                )
+
+                or
+
+                item.get(
+                    "relevance_score"
+                )
+
+            )
+
+
+            if value is not None:
+
+                scores.append(
+                    float(value)
+                )
 
 
 
-    if current_batch:
+    return scores
 
-        batches.append(
-            current_batch
-        )
-
-
-    logger.info(
-
-        "Created %d reranker batches from %d chunks.",
-
-        len(batches),
-
-        len(chunks),
-
-    )
-
-
-    return batches
 
 
 
 # ==========================================================
-# HTTP request
+# Cloudflare API
 # ==========================================================
 
 
 class CloudflareReranker:
+    """
+    Cloudflare bge-reranker wrapper.
+    """
+
 
 
     @retry(
@@ -330,7 +343,7 @@ class CloudflareReranker:
         reraise=True,
 
     )
-    async def _request(
+    async def _score(
 
         self,
 
@@ -340,8 +353,30 @@ class CloudflareReranker:
 
     ) -> list[float]:
 
+        """
+        Request relevance scores.
+        """
+
+
+        if not documents:
+
+            return []
+
+
 
         client = get_http_client()
+
+
+
+        logger.info(
+
+            "Cloudflare rerank request. "
+            "documents=%d",
+
+            len(documents),
+
+        )
+
 
 
         response = await client.post(
@@ -359,10 +394,27 @@ class CloudflareReranker:
         )
 
 
-        response.raise_for_status()
+
+        if response.status_code >= 400:
+
+
+            logger.error(
+
+                "Cloudflare reranker error %s: %s",
+
+                response.status_code,
+
+                response.text,
+
+            )
+
+
+            response.raise_for_status()
+
 
 
         payload = response.json()
+
 
 
         if not payload.get(
@@ -370,182 +422,44 @@ class CloudflareReranker:
             False,
         ):
 
+
             raise CloudflareRerankerError(
+
                 str(
                     payload.get(
                         "errors"
                     )
                 )
+
             )
 
 
-        result = payload.get(
-            "result",
-            {},
+
+        scores = _extract_scores(
+            payload
         )
 
 
-        scores = (
 
-            result.get(
-                "scores"
-            )
-
-            or
-
-            result.get(
-                "data"
-            )
-
-        )
-
-
-        if not isinstance(
-            scores,
-            list,
-        ):
+        if len(scores) != len(documents):
 
             raise CloudflareRerankerError(
-                "Invalid reranker response."
-            )
 
+                (
+                    "Score count mismatch. "
 
-        normalized = []
+                    f"Expected={len(documents)} "
 
-
-        for item in scores:
-
-
-            if isinstance(
-                item,
-                (int,float),
-            ):
-
-                normalized.append(
-                    float(item)
-                )
-
-
-            elif isinstance(
-                item,
-                dict,
-            ):
-
-                score = (
-
-                    item.get(
-                        "score"
-                    )
-
-                    or
-
-                    item.get(
-                        "relevance_score"
-                    )
+                    f"Received={len(scores)}"
 
                 )
-
-
-                if score is not None:
-
-                    normalized.append(
-                        float(score)
-                    )
-
-
-        if len(normalized) != len(documents):
-
-            raise CloudflareRerankerError(
-                "Score count mismatch."
-            )
-
-
-        return normalized
-
-
-
-# ==========================================================
-# Batch reranking
-# ==========================================================
-
-
-    async def _rerank_batches(
-
-        self,
-
-        query: str,
-
-        batches: list[list[dict[str,Any]]],
-
-    ) -> list[dict[str,Any]]:
-
-
-        ranked = []
-
-
-        for index, batch in enumerate(
-            batches,
-            start=1,
-        ):
-
-
-            logger.info(
-
-                "Processing reranker batch %d/%d size=%d",
-
-                index,
-
-                len(batches),
-
-                len(batch),
 
             )
 
 
-            texts = [
 
-                item.get(
-                    "text",
-                    "",
-                )
+        return scores
 
-                for item in batch
-
-            ]
-
-
-            scores = await self._request(
-
-                query,
-
-                texts,
-
-            )
-
-
-            for chunk, score in zip(
-
-                batch,
-
-                scores,
-
-            ):
-
-                ranked.append(
-
-                    {
-
-                        **chunk,
-
-                        "rerank_score":
-                            score,
-
-                    }
-
-                )
-
-
-        return ranked
 
 
 
@@ -560,11 +474,27 @@ class CloudflareReranker:
 
         query: str,
 
-        chunks: list[dict[str,Any]],
+        chunks: list[dict[str, Any]],
 
-        top_k: int = 5,
+        top_k: int | None = None,
 
-    ) -> list[dict[str,Any]]:
+    ) -> list[dict[str, Any]]:
+
+        """
+        Rerank already filtered semantic candidates.
+
+        Input:
+
+            TOP 5-8 chunks
+            from embedding retrieval
+
+
+        Output:
+
+            TOP 3-5 chunks
+            with rerank_score
+        """
+
 
 
         if not chunks:
@@ -572,40 +502,93 @@ class CloudflareReranker:
             return []
 
 
-        batches = _create_batches(
+
+        limit = (
+
+            top_k
+
+            if top_k is not None
+
+            else RERANK_TOP_K
+
+        )
+
+
+
+        documents = [
+
+            chunk.get(
+                "text",
+                "",
+            )
+
+            for chunk in chunks
+
+        ]
+
+
+
+        scores = await self._score(
 
             query,
+
+            documents,
+
+        )
+
+
+
+        ranked: list[dict[str, Any]] = []
+
+
+
+        for chunk, score in zip(
 
             chunks,
 
-        )
+            scores,
+
+        ):
 
 
-        ranked = await self._rerank_batches(
+            ranked.append(
 
-            query,
+                {
 
-            batches,
+                    **chunk,
 
-        )
+                    "rerank_score":
+                        score,
+
+                }
+
+            )
+
 
 
         ranked.sort(
 
-            key=lambda x:
-                x["rerank_score"],
+            key=lambda item:
+
+                item.get(
+                    "rerank_score",
+                    0,
+                ),
 
             reverse=True,
 
         )
 
 
-        result = ranked[:top_k]
+
+        result = ranked[:limit]
+
 
 
         logger.info(
 
-            "Reranked %d chunks -> %d chunks.",
+            "Reranked chunks. "
+            "input=%d output=%d",
 
             len(chunks),
 
@@ -614,7 +597,9 @@ class CloudflareReranker:
         )
 
 
+
         return result
+
 
 
 
@@ -622,14 +607,19 @@ class CloudflareReranker:
 # Singleton
 # ==========================================================
 
+
 _reranker: CloudflareReranker | None = None
 
 
 
 def get_reranker() -> CloudflareReranker:
+    """
+    Return singleton reranker instance.
+    """
 
 
     global _reranker
+
 
 
     if _reranker is None:
@@ -640,6 +630,7 @@ def get_reranker() -> CloudflareReranker:
 
 
         _reranker = CloudflareReranker()
+
 
 
     return _reranker
