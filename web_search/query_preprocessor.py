@@ -1,38 +1,49 @@
 """
 Query preprocessing layer.
 
-Pipeline:
+Pipeline position:
 
-User query
+USER QUERY
     |
     v
 Query preprocessing
     |
-    +-- normalization
-    +-- whitespace cleanup
-    +-- language detection
-    +-- intent detection
-    +-- optional query expansion (future)
+    v
+SearchQuery
     |
     v
-Hybrid Retrieval
+Qdrant Hybrid Retrieval
+    |
+    v
+Retrieval pipeline
 
 
-This module intentionally does NOT know about:
+Responsibilities:
 
-- Exa
-- Qdrant
-- Embeddings
-- Reranker
-- Compression
-- LLM
+- normalize user query;
+- remove noise;
+- detect language;
+- detect search intent;
+- prepare SearchQuery model;
+- provide normalized query for hybrid retrieval.
+
+This module does NOT:
+
+- call Exa;
+- call Qdrant;
+- generate embeddings;
+- perform ranking;
+- modify documents;
+- call LLM.
 """
 
 from __future__ import annotations
 
+
 import logging
 import re
 from enum import Enum
+
 
 from web_search.models import SearchQuery
 
@@ -48,7 +59,10 @@ logger = logging.getLogger(__name__)
 MAX_QUERY_LENGTH = 512
 
 
-MULTISPACE_RE = re.compile(r"\s+")
+MULTISPACE_RE = re.compile(
+    r"\s+"
+)
+
 
 PUNCT_RE = re.compile(
     r"[^\w\s\-.:/?]",
@@ -56,18 +70,24 @@ PUNCT_RE = re.compile(
 )
 
 
-CYRILLIC_RE = re.compile(r"[А-Яа-яЁё]")
-LATIN_RE = re.compile(r"[A-Za-z]")
+CYRILLIC_RE = re.compile(
+    r"[А-Яа-яЁё]"
+)
+
+
+LATIN_RE = re.compile(
+    r"[A-Za-z]"
+)
 
 
 # ==========================================================
-# Intent
+# Intent model
 # ==========================================================
 
 
 class QueryIntent(str, Enum):
     """
-    High-level search intent.
+    Search intent classification.
     """
 
     GENERAL = "general"
@@ -81,6 +101,7 @@ class QueryIntent(str, Enum):
     HOW_TO = "how_to"
 
 
+
 NEWS_KEYWORDS = {
     "today",
     "latest",
@@ -91,7 +112,6 @@ NEWS_KEYWORDS = {
     "сегодня",
     "последние",
     "новости",
-    "новое",
 }
 
 
@@ -100,8 +120,8 @@ COMPARE_KEYWORDS = {
     "versus",
     "compare",
     "comparison",
-    "лучше",
     "сравнение",
+    "лучше",
     "или",
 }
 
@@ -125,107 +145,168 @@ FACTUAL_PREFIXES = (
     "when",
     "where",
     "why",
-    "сколько",
     "что",
     "кто",
     "когда",
     "где",
+    "сколько",
 )
 
 
 # ==========================================================
-# Helpers
+# Normalization
 # ==========================================================
 
 
-def _normalize(
+def _normalize_query(
     query: str,
 ) -> str:
     """
-    Normalize query.
+    Normalize user query.
+
+    Operations:
+
+    - trim spaces;
+    - remove noise punctuation;
+    - collapse whitespace;
+    - limit length.
     """
 
     query = query.strip()
+
 
     query = MULTISPACE_RE.sub(
         " ",
         query,
     )
+
 
     query = PUNCT_RE.sub(
         " ",
         query,
     )
 
+
     query = MULTISPACE_RE.sub(
         " ",
         query,
     )
 
-    return query[:MAX_QUERY_LENGTH]
+
+    return query[:MAX_QUERY_LENGTH].strip()
+
+
+
+# ==========================================================
+# Language detection
+# ==========================================================
 
 
 def _detect_language(
     query: str,
 ) -> str:
     """
-    Very lightweight language detection.
+    Lightweight language detection.
+
+    Returns:
+
+        ru
+        en
     """
 
-    cyr = len(
-        CYRILLIC_RE.findall(query)
+    cyrillic_count = len(
+        CYRILLIC_RE.findall(
+            query
+        )
     )
 
-    lat = len(
-        LATIN_RE.findall(query)
+
+    latin_count = len(
+        LATIN_RE.findall(
+            query
+        )
     )
 
-    if cyr > lat:
+
+    if cyrillic_count > latin_count:
+
         return "ru"
+
 
     return "en"
 
 
+
+# ==========================================================
+# Intent detection
+# ==========================================================
+
+
 def _detect_intent(
     query: str,
-) -> QueryIntent:
+) -> str:
     """
-    Infer query intent using lightweight heuristics.
+    Detect search intent.
+
+    Lightweight heuristic classifier.
     """
 
-    q = query.lower()
+    normalized = query.lower()
 
-    words = set(q.split())
+    words = set(
+        normalized.split()
+    )
+
 
     if words & NEWS_KEYWORDS:
-        return QueryIntent.NEWS
+
+        return QueryIntent.NEWS.value
+
 
     if words & COMPARE_KEYWORDS:
-        return QueryIntent.COMPARISON
+
+        return QueryIntent.COMPARISON.value
+
 
     if words & HOW_TO_KEYWORDS:
-        return QueryIntent.HOW_TO
 
-    if q.startswith(FACTUAL_PREFIXES):
-        return QueryIntent.FACTUAL
+        return QueryIntent.HOW_TO.value
 
-    return QueryIntent.GENERAL
+
+    if normalized.startswith(
+        FACTUAL_PREFIXES
+    ):
+
+        return QueryIntent.FACTUAL.value
+
+
+    return QueryIntent.GENERAL.value
+
+
+
+# ==========================================================
+# Query expansion
+# ==========================================================
 
 
 def _expand_query(
     query: str,
 ) -> list[str]:
     """
-    Placeholder for future query expansion.
+    Placeholder for future expansion.
 
-    Future versions may use:
-    - synonym expansion
-    - acronym expansion
-    - LLM rewriting
-    - multilingual expansion
+    Reserved for:
+
+    - synonyms;
+    - acronym expansion;
+    - multilingual expansion;
+    - LLM rewriting.
+
+    Current pipeline keeps empty list.
     """
 
     return []
+
 
 
 # ==========================================================
@@ -237,39 +318,74 @@ def preprocess_query(
     query: str,
 ) -> SearchQuery:
     """
-    Prepare query for retrieval pipeline.
+    Convert raw user query into SearchQuery model.
+
+    Output is consumed by:
+
+    - qdrant_store.py
+    - exa.py
+    - retrieval pipeline
     """
 
-    if not query.strip():
+    if not query or not query.strip():
+
         raise ValueError(
             "Query cannot be empty."
         )
 
-    normalized = _normalize(query)
+
+    normalized = _normalize_query(
+        query
+    )
+
+
+    if not normalized:
+
+        raise ValueError(
+            "Query became empty after normalization."
+        )
+
 
     language = _detect_language(
-        normalized,
+        normalized
     )
+
 
     intent = _detect_intent(
-        normalized,
+        normalized
     )
 
-    expanded = _expand_query(
-        normalized,
+
+    expanded_queries = _expand_query(
+        normalized
     )
+
+
+    result = SearchQuery(
+
+        original=query,
+
+        normalized=normalized,
+
+        language=language,
+
+        intent=intent,
+
+        expanded_queries=expanded_queries,
+
+    )
+
 
     logger.info(
-        "Query preprocessed "
-        "(language=%s intent=%s)",
-        language,
-        intent.value,
+
+        "Query preprocessed. "
+        "language=%s intent=%s",
+
+        result.language,
+
+        result.intent,
+
     )
 
-    return SearchQuery(
-        original=query,
-        normalized=normalized,
-        language=language,
-        intent=intent.value,
-        expanded_queries=expanded,
-    )
+
+    return result
