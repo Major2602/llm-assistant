@@ -1,74 +1,71 @@
 """
 Web search orchestration layer.
 
-Pipeline:
+Baseline Architecture v1
 
-Query
- |
- v
-Semantic cache (Qdrant)
- |
- +-- hit
- |
- +-- miss
-        |
-        v
-      Exa
-        |
-        v
-      Chunking
-        |
-        v
-      Chunk filtering
-        |
-        v
-      Reranking
-        |
-        v
-      Qdrant memory
-        |
-        v
-      AgentContext
+Pipeline
 
-
-This module does not know about:
-- Chainlit;
-- UI;
-- LangGraph internals.
+User Query
+    │
+    ▼
+Query Preprocessing
+    │
+    ▼
+Qdrant Hybrid Retrieval
+    │
+    ├─────────────── Cache Hit
+    │                     │
+    │                     ▼
+    │               Cloudflare Reranker
+    │
+    └─────────────── Cache Miss
+                          │
+                          ▼
+                    Exa Search
+                          │
+                    Document Normalize
+                          │
+                        Chunker
+                          │
+                     Filter Chunks
+                          │
+                 Embedding Retrieval
+                          │
+                          ▼
+                  Cloudflare Reranker
+                          │
+                          ▼
+               Extractive Compression
+                          │
+                          ▼
+                 Context Optimization
+                          │
+                ┌─────────┴─────────┐
+                ▼                   ▼
+          Qdrant Memory        Agent Context
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
 
-
+from web_search.chunker import chunk_documents
+from web_search.compression import compress_chunks
+from web_search.context_optimizer import optimize_context
+from web_search.embedding_retrieval import retrieve_by_embeddings
 from web_search.exa import search_exa
-
-from web_search.chunker import (
-    chunk_documents,
+from web_search.filter import filter_chunks
+from web_search.models import (
+    AgentContext,
+    RankedChunk,
 )
-
-from web_search.filter import (
-    filter_chunks,
-)
-
-from web_search.reranker import (
-    get_reranker,
-)
-
 from web_search.qdrant_store import (
     add_chunks,
     cleanup_old_chunks,
-    search,
+    hybrid_search,
 )
-
-from web_search.models import (
-    AgentContext,
-    Source,
-)
-
+from web_search.reranker import get_reranker
 
 logger = logging.getLogger(__name__)
 
@@ -77,201 +74,150 @@ logger = logging.getLogger(__name__)
 # Configuration
 # ==========================================================
 
+FILTER_TOP_K = 10
 
-CACHE_TOP_K = 5
+EMBEDDING_TOP_K = 8
 
-RERANK_OUTPUT_K = 8
-
-SIMILARITY_THRESHOLD = 0.80
-
-MAX_RERANK_CHUNKS = 50
-
+RERANK_TOP_K = 5
 
 
 # ==========================================================
 # Initialization
 # ==========================================================
 
-
 _initialized = False
 
-_init_lock = asyncio.Lock()
-
+_lock = asyncio.Lock()
 
 
 async def init_web_search() -> None:
     """
-    Initialize web search subsystem once.
+    Initialize web search subsystem.
     """
 
     global _initialized
 
-
     if _initialized:
         return
 
-
-    async with _init_lock:
+    async with _lock:
 
         if _initialized:
             return
 
+        logger.info("Initializing web search.")
 
-        try:
+        await cleanup_old_chunks(days=30)
 
-            logger.info(
-                "Initializing web_search subsystem."
-            )
+        _initialized = True
 
-
-            await cleanup_old_chunks(
-                days=30
-            )
-
-
-            _initialized = True
-
-
-            logger.info(
-                "web_search initialized successfully."
-            )
-
-
-        except Exception:
-
-            logger.exception(
-                "Failed initializing web_search."
-            )
-
-            raise
-
+        logger.info("Web search initialized.")
 
 
 # ==========================================================
-# Formatting
+# Query preprocessing
 # ==========================================================
 
 
-def _format_context(
-    chunks: list[dict[str, Any]],
+def preprocess_query(
+    query: str,
 ) -> str:
     """
-    Prepare context text for LLM.
+    Lightweight query preprocessing.
+
+    Future:
+
+    - language detection
+    - intent extraction
+    - query expansion
     """
 
-
-    sections = []
-
-
-    for index, chunk in enumerate(
-        chunks,
-        start=1,
-    ):
-
-        sections.append(
-            f"""
-SOURCE [{index}]
-
-Title:
-{chunk.get("title", "")}
-
-Content:
-{chunk.get("text", "")}
-"""
-        )
-
-
-    return "\n\n".join(
-        sections
+    return " ".join(
+        query.strip().split()
     )
 
 
-
 # ==========================================================
-# Sources
+# Cache Miss Pipeline
 # ==========================================================
 
 
-def _extract_sources(
-    chunks: list[dict[str, Any]],
-) -> list[Source]:
+async def _build_from_exa(
+    query: str,
+) -> list[RankedChunk]:
     """
-    Extract unique citation sources.
+    Execute retrieval pipeline after cache miss.
     """
 
+    logger.info(
+        "Starting Exa retrieval pipeline."
+    )
 
-    result: list[Source] = []
+    documents = await search_exa(query)
 
-    seen_urls: set[str] = set()
+    chunks = chunk_documents(documents)
 
+    filtered = filter_chunks(
+        chunks=chunks,
+        query=query,
+        top_k=FILTER_TOP_K,
+    )
 
-    for chunk in chunks:
+    semantic = await retrieve_by_embeddings(
+        query=query,
+        chunks=filtered,
+        top_k=EMBEDDING_TOP_K,
+    )
 
-        url = chunk.get(
-            "url",
-            "",
-        )
+    reranker = get_reranker()
 
+    ranked = await reranker.rerank(
+        query=query,
+        chunks=semantic,
+        top_k=RERANK_TOP_K,
+    )
 
-        if not url:
-            continue
-
-
-        if url in seen_urls:
-            continue
-
-
-        seen_urls.add(
-            url
-        )
-
-
-        result.append(
-
-            Source(
-
-                title=(
-                    chunk.get("title")
-                    or "Untitled source"
-                ),
-
-                url=url,
-
-                provider=chunk.get(
-                    "provider"
-                ),
-
-                score=(
-                    chunk.get(
-                        "rerank_score"
-                    )
-                    or chunk.get(
-                        "filter_score"
-                    )
-                    or chunk.get(
-                        "score"
-                    )
-                ),
-
-                published_date=chunk.get(
-                    "published_date"
-                ),
-
-                author=chunk.get(
-                    "author"
-                ),
-
-            )
-
-        )
-
-
-    return result
-
+    return ranked
 
 
 # ==========================================================
-# Main pipeline
+# Cache Hit Pipeline
+# ==========================================================
+
+
+async def _build_from_cache(
+    query: str,
+):
+    """
+    Hybrid retrieval pipeline.
+    """
+
+    cached = await hybrid_search(
+        query=query,
+        limit=EMBEDDING_TOP_K,
+    )
+
+    if not cached:
+        return None
+
+    logger.info(
+        "Hybrid cache hit (%d chunks).",
+        len(cached),
+    )
+
+    reranker = get_reranker()
+
+    ranked = await reranker.rerank(
+        query=query,
+        chunks=cached,
+        top_k=RERANK_TOP_K,
+    )
+
+    return ranked
+
+
+# ==========================================================
+# Public API
 # ==========================================================
 
 
@@ -279,245 +225,74 @@ async def get_context(
     query: str,
 ) -> AgentContext:
     """
-    Build context for agent.
-
-    Pipeline:
-
-        Qdrant cache
-            |
-            v
-        Exa documents
-            |
-            v
-        Chunking
-            |
-            v
-        Chunk filtering
-            |
-            v
-        Reranking
-            |
-            v
-        Qdrant memory
+    Build optimized context for the agent.
     """
 
+    await init_web_search()
 
-    query = query.strip()
-
+    query = preprocess_query(query)
 
     if not query:
-
         raise ValueError(
             "Query cannot be empty."
         )
 
-
-    await init_web_search()
-
-
-
     logger.info(
-        "Building context for query='%s'",
+        "Building context for '%s'.",
         query,
     )
 
+    #
+    # Hybrid retrieval
+    #
 
+    ranked = await _build_from_cache(
+        query,
+    )
 
-    try:
+    #
+    # Cache miss
+    #
 
-
-        # ==================================================
-        # 1. Semantic cache
-        # ==================================================
-
-        cached = await search(
-
-            query=query,
-
-            limit=CACHE_TOP_K,
-
-            score_threshold=SIMILARITY_THRESHOLD,
-
-        )
-
-
-        if cached:
-
-            logger.info(
-                "Semantic cache hit. chunks=%d",
-                len(cached),
-            )
-
-
-            return AgentContext(
-
-                text=_format_context(
-                    cached
-                ),
-
-                sources=_extract_sources(
-                    cached
-                ),
-
-            )
-
-
+    if ranked is None:
 
         logger.info(
-            "Semantic cache miss."
+            "Cache miss."
         )
 
-
-
-        # ==================================================
-        # 2. Exa retrieval
-        # ==================================================
-
-        documents = await search_exa(
-            query
-        )
-
-
-        logger.info(
-            "Received %d Exa documents.",
-            len(documents),
-        )
-
-
-
-        # ==================================================
-        # 3. Chunking
-        # ==================================================
-
-        chunks = chunk_documents(
-            documents
-        )
-
-
-        if not chunks:
-
-            raise RuntimeError(
-                "No chunks generated."
-            )
-
-
-        logger.info(
-            "Generated chunks=%d",
-            len(chunks),
-        )
-
-
-
-        # ==================================================
-        # 4. Chunk filtering
-        # ==================================================
-
-        filtered_chunks = filter_chunks(
-
-            chunks,
-
+        ranked = await _build_from_exa(
             query,
-
         )
 
-
-        if not filtered_chunks:
-
-            raise RuntimeError(
-                "No chunks after filtering."
-            )
-
-
-        logger.info(
-            "Filtered chunks=%d",
-            len(filtered_chunks),
-        )
-
-
-
-        filtered_chunks = filtered_chunks[
-            :MAX_RERANK_CHUNKS
-        ]
-
-
-        logger.info(
-            "Chunks sent to reranker=%d",
-            len(filtered_chunks),
-        )
-
-
-
-        # ==================================================
-        # 5. Reranking
-        # ==================================================
-
-        reranker = get_reranker()
-
-
-        ranked_chunks = await reranker.rerank(
-
-            query=query,
-
-            chunks=filtered_chunks,
-
-            top_k=RERANK_OUTPUT_K,
-
-        )
-
-
-        if not ranked_chunks:
-
-            raise RuntimeError(
-                "Reranker returned no chunks."
-            )
-
-
-        logger.info(
-            "Selected ranked chunks=%d",
-            len(ranked_chunks),
-        )
-
-
-
-        # ==================================================
-        # 6. Persistent semantic memory
-        # ==================================================
+        #
+        # Store only final ranked chunks.
+        #
 
         await add_chunks(
-            ranked_chunks
+            ranked,
         )
 
+    #
+    # Compression
+    #
 
-        logger.info(
-            "Stored %d chunks into Qdrant.",
-            len(ranked_chunks),
-        )
+    compressed = await compress_chunks(
+        query=query,
+        chunks=ranked,
+    )
 
+    #
+    # Final context optimization
+    #
 
+    context = optimize_context(
+        query=query,
+        chunks=compressed,
+    )
 
-        # ==================================================
-        # 7. Agent context
-        # ==================================================
+    logger.info(
+        "Context ready. Sources=%d",
+        len(context.sources),
+    )
 
-        return AgentContext(
-
-            text=_format_context(
-                ranked_chunks
-            ),
-
-            sources=_extract_sources(
-                ranked_chunks
-            ),
-
-        )
-
-
-
-    except Exception:
-
-        logger.exception(
-            "Failed building context for query='%s'.",
-            query,
-        )
-
-        raise
+    return context
