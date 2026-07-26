@@ -1,10 +1,21 @@
 """
-Agent layer.
+Web search agent.
 
-Contains LangChain agent configuration and tools.
+Responsibilities:
+- configure LangChain agent;
+- expose web_search tool;
+- bridge AgentContext to the LLM.
 
-The UI layer must not depend on this module directly.
-Streaming and event conversion are handled by ui.streaming.
+The agent intentionally knows nothing about:
+
+- Exa
+- Qdrant
+- Hybrid Retrieval
+- Embeddings
+- Compression
+- Context Optimization
+
+All retrieval logic lives inside web_search.context.
 """
 
 from __future__ import annotations
@@ -13,105 +24,64 @@ import logging
 import threading
 from typing import Any
 
-
 from langchain.agents import create_agent
 from langchain.tools import tool
 
-
 from llm import get_llm
-
-from web_search.context import (
-    get_context,
-)
-
+from web_search.context import get_context
 
 logger = logging.getLogger(__name__)
 
 
-
 # ==========================================================
-# WEB SEARCH TOOL
+# Web Search Tool
 # ==========================================================
 
 
-@tool(
-    response_format="content_and_artifact"
-)
+@tool(response_format="content_and_artifact")
 async def web_search(
     query: str,
 ) -> tuple[str, dict[str, Any]]:
     """
-    Search external information sources.
-
-    Use this tool for:
-
-    - factual questions;
-    - recent information;
-    - information not available in conversation.
+    Retrieve optimized external context.
 
     Returns:
 
-    - relevant context;
-    - source metadata.
+        content:
+            Optimized context prepared for LLM.
+
+        artifact:
+            Source metadata used by UI.
     """
 
-
     logger.info(
-        "Web search tool called. Query='%s'",
+        "Web search requested. query='%s'",
         query,
     )
 
+    context = await get_context(query)
 
-    try:
+    artifact = {
+        "sources": [
+            source.model_dump()
+            for source in context.sources
+        ],
+    }
 
-        context = await get_context(
-            query
-        )
+    logger.info(
+        "Context ready. sources=%d tokens=%d",
+        len(context.sources),
+        context.token_count,
+    )
 
-
-        artifact = {
-
-            "sources": [
-
-                source.model_dump()
-
-                for source in context.sources
-
-            ]
-
-        }
-
-
-        logger.info(
-            "Web search completed. Sources=%d",
-            len(
-                context.sources
-            ),
-        )
-
-
-        return (
-
-            context.text,
-
-            artifact,
-
-        )
-
-
-    except Exception:
-
-        logger.exception(
-            "web_search tool failed for '%s'.",
-            query,
-        )
-
-        raise
-
+    return (
+        context.text,
+        artifact,
+    )
 
 
 # ==========================================================
-# AGENT
+# Agent Singleton
 # ==========================================================
 
 
@@ -120,107 +90,83 @@ _agent: Any | None = None
 _agent_lock = threading.Lock()
 
 
+SYSTEM_PROMPT = """
+You are an advanced AI assistant.
 
-def get_agent() -> Any:
-    """
-    Create and return singleton LangChain agent.
-    """
+You have access to a retrieval tool that provides
+optimized external knowledge.
 
+When answering:
 
-    global _agent
+• Use retrieved context whenever available.
+• Prefer retrieved facts over prior knowledge.
+• Never invent unsupported information.
+• If the retrieved context is insufficient,
+  explicitly state the uncertainty.
 
+When sources are available:
 
-    if _agent is not None:
-        return _agent
+• Base the answer only on supported facts.
+• Do not fabricate citations.
+• Preserve factual consistency.
 
+Never mention internal implementation details.
 
+Never mention:
 
-    with _agent_lock:
-
-
-        if _agent is not None:
-            return _agent
-
-
-
-        try:
-
-            logger.info(
-                "Initializing web_search agent."
-            )
-
-
-            _agent = create_agent(
-
-                model=get_llm(),
-
-
-                tools=[
-
-                    web_search,
-
-                ],
-
-
-                system_prompt="""
-
-You are a helpful AI assistant.
-
-Use web_search whenever:
-
-- factual information is required;
-- recent information is required;
-- external knowledge is needed.
-
-The tool provides relevant context and sources.
-
-Answer using the provided information.
-
-Rules:
-
-- Do not mention internal implementation details.
-- Do not mention:
-    - Qdrant
-    - embeddings
-    - semantic cache
-    - Exa
-    - internal tools
+- Exa
+- Qdrant
+- BM25
+- embeddings
+- reranking
+- semantic cache
+- compression
+- retrieval pipeline
 
 unless the user explicitly asks.
 
 Always answer in the user's language.
 
-When sources are provided:
-- use them naturally;
-- avoid inventing unsupported facts;
-- clearly distinguish known information from uncertainty.
-
-""",
-
-            )
+Produce concise, accurate and well-structured answers.
+"""
 
 
-            logger.info(
-                "Web search agent initialized successfully."
-            )
+def get_agent() -> Any:
+    """
+    Return singleton LangChain agent.
+    """
 
+    global _agent
 
+    if _agent is not None:
+        return _agent
+
+    with _agent_lock:
+
+        if _agent is not None:
             return _agent
 
+        logger.info(
+            "Initializing web search agent."
+        )
 
+        _agent = create_agent(
+            model=get_llm(),
+            tools=[
+                web_search,
+            ],
+            system_prompt=SYSTEM_PROMPT,
+        )
 
-        except Exception:
+        logger.info(
+            "Web search agent initialized."
+        )
 
-            logger.exception(
-                "Failed initializing web_search agent."
-            )
-
-            raise
-
+        return _agent
 
 
 # ==========================================================
-# PUBLIC API
+# Public API
 # ==========================================================
 
 
@@ -229,98 +175,53 @@ async def ask_agent(
 ) -> str:
     """
     Execute agent without streaming.
-
-    Used for testing or non-UI integrations.
     """
-
 
     logger.info(
         "Agent request received."
     )
 
+    agent = get_agent()
 
-    try:
+    result = await agent.ainvoke(
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": text,
+                }
+            ]
+        }
+    )
 
-        agent = get_agent()
-
-
-
-        result = await agent.ainvoke(
-
-            {
-                "messages": [
-
-                    {
-                        "role": "user",
-                        "content": text,
-                    }
-
-                ]
-            }
-
+    if not isinstance(
+        result,
+        dict,
+    ):
+        raise RuntimeError(
+            "Unexpected agent response."
         )
 
+    messages = result.get(
+        "messages",
+        [],
+    )
 
-
-        if not isinstance(
-            result,
-            dict,
-        ):
-
-            raise RuntimeError(
-                "Unexpected agent response format."
-            )
-
-
-
-        messages = result.get(
-            "messages",
-            [],
+    if not messages:
+        raise RuntimeError(
+            "Agent returned no messages."
         )
 
+    content = messages[-1].content
 
+    response = (
+        content
+        if isinstance(content, str)
+        else str(content)
+    )
 
-        if not messages:
+    logger.info(
+        "Agent response generated successfully."
+    )
 
-            raise RuntimeError(
-                "Agent returned empty response."
-            )
-
-
-
-        content = messages[-1].content
-
-
-
-        if isinstance(
-            content,
-            str,
-        ):
-
-            response = content
-
-
-        else:
-
-            response = str(
-                content
-            )
-
-
-
-        logger.info(
-            "Agent response generated successfully."
-        )
-
-
-        return response
-
-
-
-    except Exception:
-
-        logger.exception(
-            "Agent execution failed."
-        )
-
-        raise
+    return response
