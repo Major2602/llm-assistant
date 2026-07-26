@@ -21,14 +21,14 @@ Embedding similarity
 Cloudflare reranker
  |
  v
-Qdrant
+Compression
 
 
 Responsibilities:
 
-- remove bad chunks;
+- remove invalid chunks;
 - remove duplicates;
-- apply cheap relevance scoring;
+- apply lightweight lexical scoring;
 - reduce candidate pool before embeddings.
 
 
@@ -36,10 +36,9 @@ This module does NOT know about:
 
 - embeddings;
 - Qdrant;
-- BM25;
 - reranking;
-- LLM;
-- compression.
+- compression;
+- LLM.
 """
 
 
@@ -49,7 +48,14 @@ from __future__ import annotations
 import logging
 import re
 
-from typing import Any
+
+from typing import Iterable
+
+
+from web_search.models import (
+    DocumentChunk,
+    FilteredChunk,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -75,7 +81,7 @@ MIN_SCORE = 0.30
 
 
 # ==========================================================
-# Text processing
+# Text utilities
 # ==========================================================
 
 
@@ -87,13 +93,9 @@ def _normalize_text(
     """
 
     return re.sub(
-
         r"[^a-zA-Zа-яА-Я0-9 ]+",
-
         " ",
-
         text.lower(),
-
     )
 
 
@@ -105,16 +107,13 @@ def _tokens(
     Extract meaningful tokens.
     """
 
-    words = _normalize_text(
-        text
-    ).split()
-
-
     return {
 
         word
 
-        for word in words
+        for word in _normalize_text(
+            text
+        ).split()
 
         if len(word) > 2
 
@@ -129,12 +128,10 @@ def _tokens(
 
 def _query_overlap_score(
     query: str,
-    chunk: dict[str, Any],
+    chunk: DocumentChunk,
 ) -> float:
     """
-    Cheap lexical relevance.
-
-    Used only as pre-filter signal.
+    Lightweight lexical relevance score.
     """
 
     query_tokens = _tokens(
@@ -143,16 +140,14 @@ def _query_overlap_score(
 
 
     if not query_tokens:
+
         return 0.0
 
 
 
-    text = (
+    chunk_text = (
 
-        chunk.get(
-            "title",
-            ""
-        )
+        chunk.title
 
         +
 
@@ -160,54 +155,40 @@ def _query_overlap_score(
 
         +
 
-        chunk.get(
-            "text",
-            ""
-        )
+        chunk.text
 
     )
 
 
     chunk_tokens = _tokens(
-        text
+        chunk_text
     )
 
 
-    overlap = (
+    return min(
 
         len(
             query_tokens
             &
             chunk_tokens
         )
-
         /
+        len(query_tokens),
 
-        len(
-            query_tokens
-        )
-
-    )
-
-
-    return min(
-        overlap,
         1.0,
+
     )
 
 
 
 def _quality_score(
-    chunk: dict[str, Any],
+    chunk: DocumentChunk,
 ) -> float:
     """
-    Estimate information quality.
+    Estimate chunk information quality.
     """
 
-    text = chunk.get(
-        "text",
-        "",
-    )
+    text = chunk.text
 
 
     if len(text) < MIN_TEXT_LENGTH:
@@ -232,9 +213,7 @@ def _quality_score(
     unique_ratio = (
 
         len(
-            set(
-                words
-            )
+            set(words)
         )
 
         /
@@ -268,7 +247,7 @@ def _quality_score(
 
 
 def _metadata_score(
-    chunk: dict[str, Any],
+    chunk: DocumentChunk,
 ) -> float:
     """
     Score metadata completeness.
@@ -277,23 +256,17 @@ def _metadata_score(
     score = 0.0
 
 
-    if chunk.get(
-        "title"
-    ):
+    if chunk.title:
 
         score += 0.4
 
 
-    if chunk.get(
-        "url"
-    ):
+    if chunk.url:
 
         score += 0.4
 
 
-    if chunk.get(
-        "document_id"
-    ):
+    if chunk.id:
 
         score += 0.2
 
@@ -304,40 +277,36 @@ def _metadata_score(
 
 def _calculate_score(
     query: str,
-    chunk: dict[str, Any],
+    chunk: DocumentChunk,
 ) -> float:
     """
-    Combined pre-filter score.
+    Combined filtering score.
     """
-
-
-    relevance = _query_overlap_score(
-        query,
-        chunk,
-    )
-
-
-    quality = _quality_score(
-        chunk
-    )
-
-
-    metadata = _metadata_score(
-        chunk
-    )
-
 
     return (
 
-        relevance * 0.5
+        _query_overlap_score(
+            query,
+            chunk,
+        )
+        *
+        0.5
 
         +
 
-        quality * 0.35
+        _quality_score(
+            chunk,
+        )
+        *
+        0.35
 
         +
 
-        metadata * 0.15
+        _metadata_score(
+            chunk,
+        )
+        *
+        0.15
 
     )
 
@@ -348,15 +317,33 @@ def _calculate_score(
 # ==========================================================
 
 
+def _fingerprint(
+    text: str,
+) -> str:
+    """
+    Create lightweight text fingerprint.
+    """
+
+    return (
+
+        text[:500]
+
+        .strip()
+
+        .lower()
+
+    )
+
+
+
 def _deduplicate(
-    chunks: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
+    chunks: Iterable[DocumentChunk],
+) -> list[DocumentChunk]:
     """
     Remove duplicate chunks.
     """
 
-    result = []
-
+    result: list[DocumentChunk] = []
 
     seen: set[str] = set()
 
@@ -364,21 +351,8 @@ def _deduplicate(
 
     for chunk in chunks:
 
-
-        text = chunk.get(
-            "text",
-            "",
-        )
-
-
-        fingerprint = (
-
-            text[:500]
-
-            .strip()
-
-            .lower()
-
+        fingerprint = _fingerprint(
+            chunk.text
         )
 
 
@@ -408,20 +382,20 @@ def _deduplicate(
 
 
 def filter_chunks(
-    chunks: list[dict[str, Any]],
+    chunks: list[DocumentChunk],
     query: str,
-) -> list[dict[str, Any]]:
+) -> list[FilteredChunk]:
     """
     Filter semantic chunks.
 
     Input:
 
-        chunks from chunker.py
+        DocumentChunk list
 
 
     Output:
 
-        TOP 10 candidate chunks
+        TOP filtered chunks with filter_score
 
 
     Next stage:
@@ -437,7 +411,7 @@ def filter_chunks(
 
     logger.info(
 
-        "Filtering %d chunks.",
+        "Filtering chunks=%d",
 
         len(chunks),
 
@@ -445,7 +419,7 @@ def filter_chunks(
 
 
 
-    chunks = _deduplicate(
+    unique_chunks = _deduplicate(
         chunks
     )
 
@@ -454,23 +428,19 @@ def filter_chunks(
     scored: list[
         tuple[
             float,
-            dict[str, Any]
+            FilteredChunk
         ]
     ] = []
 
 
 
-    for chunk in chunks:
+    for chunk in unique_chunks:
 
 
         score = _calculate_score(
-
             query,
-
             chunk,
-
         )
-
 
 
         if score < MIN_SCORE:
@@ -479,17 +449,20 @@ def filter_chunks(
 
 
 
-        chunk["filter_score"] = score
+        filtered = FilteredChunk(
 
+            **chunk.model_dump(),
+
+            filter_score=score,
+
+        )
 
 
         scored.append(
 
             (
                 score,
-
-                chunk,
-
+                filtered,
             )
 
         )
@@ -498,8 +471,7 @@ def filter_chunks(
 
     scored.sort(
 
-        key=lambda item:
-            item[0],
+        key=lambda item: item[0],
 
         reverse=True,
 
@@ -521,11 +493,12 @@ def filter_chunks(
 
     logger.info(
 
-        "Selected %d chunks after filtering.",
+        "Filtered chunks=%d",
 
         len(result),
 
     )
+
 
 
     return result
