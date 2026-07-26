@@ -1,265 +1,379 @@
 """
 Web search domain models.
 
-Contains internal data contracts between:
-- Exa retrieval layer;
-- chunking layer;
-- chunk filtering layer;
-- embedding layer;
-- reranking layer;
-- Qdrant storage layer;
-- agent/UI layer.
+Contracts between:
 
-No business logic is allowed here.
+Exa retrieval
+      |
+      v
+Document normalization
+      |
+      v
+Chunking
+      |
+      v
+Filtering
+      |
+      v
+Embedding retrieval
+      |
+      v
+Reranking
+      |
+      v
+Compression
+      |
+      v
+Context optimization
+      |
+      v
+Agent
+
+This module contains only:
+- data models;
+- pipeline contracts.
+
+No:
+- API calls;
+- storage logic;
+- ranking logic;
+- business rules.
 """
 
 from __future__ import annotations
 
+
 from pydantic import BaseModel, Field
 
 
-
 # ==========================================================
-# Source model
+# Source
 # ==========================================================
 
 
 class Source(BaseModel):
     """
-    External information source.
+    External citation source.
 
-    Represents a document/page returned by:
-    - Exa;
-    - Qdrant semantic memory.
+    Used by:
+    - UI;
+    - agent;
+    - citations.
     """
 
-
     title: str = Field(
-        default="Untitled source",
-        description="Source title.",
+        default="Untitled source"
     )
-
 
     url: str = Field(
-        default="",
-        description="Source URL.",
+        default=""
     )
-
 
     provider: str | None = Field(
-        default=None,
-        description="Source provider.",
+        default=None
     )
-
-
-    score: float | None = Field(
-        default=None,
-        description="Final relevance score.",
-    )
-
-
-    published_date: str | None = Field(
-        default=None,
-        description="Publication date if available.",
-    )
-
 
     author: str | None = Field(
-        default=None,
-        description="Author if available.",
+        default=None
+    )
+
+    published_date: str | None = Field(
+        default=None
     )
 
 
 
 # ==========================================================
-# Web document model
+# Exa document
 # ==========================================================
 
 
 class WebDocument(BaseModel):
     """
-    Raw document returned by Exa.
+    Normalized document from Exa.
 
-    Contains full document text.
+    Stage:
 
-    No:
-    - filtering;
-    - chunking;
-    - embedding;
-    - ranking
-
-    happens here.
+        Exa
+          |
+          v
+        WebDocument
     """
 
-
-    query: str = Field(
-        description="Original user search query.",
-    )
+    query: str
 
 
     title: str = Field(
-        default="Untitled",
-        description="Document title.",
+        default="Untitled"
     )
 
 
     url: str = Field(
-        default="",
-        description="Document URL.",
+        default=""
     )
 
 
     text: str = Field(
-        default="",
-        description="Full cleaned document content.",
+        default=""
     )
 
 
     provider: str = Field(
-        default="exa",
-        description="Document provider.",
+        default="exa"
     )
 
 
-    published_date: str | None = Field(
-        default=None,
-        description="Publication date.",
-    )
+    author: str | None = None
 
 
-    author: str | None = Field(
-        default=None,
-        description="Document author.",
-    )
+    published_date: str | None = None
 
 
 
 # ==========================================================
-# Chunk model
+# Chunk
 # ==========================================================
 
 
 class DocumentChunk(BaseModel):
     """
-    Text chunk created from WebDocument.
+    Semantic text chunk.
 
-    Chunking happens immediately after Exa retrieval.
+    Created by chunker.py.
 
-    These objects are candidates for:
-    - heuristic filtering;
-    - reranking;
-    - vector storage.
+    Contains original metadata.
     """
 
 
-    id: str = Field(
-        description="Unique chunk identifier.",
+    id: str
+
+
+    query: str
+
+
+    title: str = (
+        "Untitled"
     )
 
 
-    query: str = Field(
-        description="Original user query.",
+    url: str = ""
+
+
+    text: str
+
+
+    provider: str = (
+        "exa"
     )
 
 
-    title: str = Field(
-        default="Untitled",
-        description="Original document title.",
-    )
+    chunk_index: int = 0
 
 
-    url: str = Field(
-        default="",
-        description="Original document URL.",
-    )
+    author: str | None = None
 
 
-    text: str = Field(
-        description="Chunk content.",
-    )
+    published_date: str | None = None
 
 
-    provider: str = Field(
-        default="exa",
-        description="Chunk provider.",
-    )
+    created_at: int | None = None
 
 
-    chunk_index: int = Field(
-        default=0,
-        description="Chunk position inside source document.",
-    )
-
-
-    published_date: str | None = Field(
-        default=None,
-        description="Publication date.",
-    )
-
-
-    author: str | None = Field(
-        default=None,
-        description="Document author.",
-    )
-
-
-    created_at: int | None = Field(
-        default=None,
-        description="Creation timestamp.",
-    )
-
-
-    last_access: int | None = Field(
-        default=None,
-        description="Last access timestamp.",
-    )
+    last_access: int | None = None
 
 
 
 # ==========================================================
-# Filtered chunk model
+# Filtered chunk
 # ==========================================================
 
 
-class FilteredChunk(DocumentChunk):
+class FilteredChunk(
+    DocumentChunk
+):
     """
-    Chunk after cheap heuristic filtering.
+    Chunk after heuristic filtering.
 
-    Filter layer removes:
-    - irrelevant chunks;
-    - low information chunks;
-    - duplicates.
+    filter.py output.
 
-    Does not use:
-    - embeddings;
-    - reranker;
-    - LLM.
+    Ranking signals:
+
+    - keyword relevance
+    - quality
+    - duplication
     """
 
 
-    filter_score: float = Field(
-        default=0.0,
-        description="Cheap heuristic relevance score.",
+    filter_score: float = 0.0
+
+
+
+# ==========================================================
+# Embedding retrieval
+# ==========================================================
+
+
+class EmbeddingResult(
+    FilteredChunk
+):
+    """
+    Chunk after dense similarity retrieval.
+
+    embedding_retrieval.py output.
+
+    Used after:
+
+        filter_chunks()
+
+        TOP 10
+
+            |
+
+        embedding similarity
+
+            |
+
+        TOP 5-8
+    """
+
+
+    similarity_score: float = 0.0
+
+
+
+# ==========================================================
+# Hybrid retrieval
+# ==========================================================
+
+
+class HybridSearchResult(
+    DocumentChunk
+):
+    """
+    Result returned by Qdrant hybrid retrieval.
+
+    Contains:
+
+    Dense vector score
+    +
+    BM25 sparse score
+    +
+    fusion score
+    """
+
+
+    dense_score: float = 0.0
+
+
+    sparse_score: float = 0.0
+
+
+    fusion_score: float = 0.0
+
+
+
+# ==========================================================
+# Ranked chunk
+# ==========================================================
+
+
+class RankedChunk(
+    EmbeddingResult
+):
+    """
+    Final ranking output.
+
+    Produced by:
+
+        Cloudflare reranker
+
+    """
+
+    rerank_score: float = 0.0
+
+
+
+# ==========================================================
+# Compression
+# ==========================================================
+
+
+class CompressedChunk(
+    RankedChunk
+):
+    """
+    Chunk after extractive compression.
+
+    compression.py output.
+
+
+    Original:
+
+        1200 tokens
+
+
+    Compressed:
+
+        200-300 tokens
+
+
+    Keeps:
+    - relevance;
+    - citation metadata.
+    """
+
+
+    compressed_text: str = ""
+
+
+    compression_ratio: float = 1.0
+
+
+
+# ==========================================================
+# Context optimization
+# ==========================================================
+
+
+class ContextDocument(BaseModel):
+    """
+    Final optimized context unit.
+
+    Prepared before LLM generation.
+    """
+
+
+    text: str
+
+
+    source: Source
+
+
+    relevance_score: float = 0.0
+
+
+
+class OptimizedContext(BaseModel):
+    """
+    Final context package.
+
+    Sent to Groq LLM.
+    """
+
+
+    query: str
+
+
+    documents: list[ContextDocument] = Field(
+        default_factory=list
     )
 
 
-
-# ==========================================================
-# Ranked chunk model
-# ==========================================================
+    total_tokens: int = 0
 
 
-class RankedChunk(FilteredChunk):
-    """
-    Chunk after semantic reranking.
-
-    Final object before Qdrant persistence.
-    """
-
-
-    rerank_score: float = Field(
-        default=0.0,
-        description="Cloudflare reranker relevance score.",
+    citation_map: dict[str, Source] = Field(
+        default_factory=dict
     )
 
 
@@ -271,25 +385,24 @@ class RankedChunk(FilteredChunk):
 
 class AgentContext(BaseModel):
     """
-    Context returned to the agent tool.
+    Context consumed by agent layer.
 
     Contains:
 
     text:
-        formatted information for LLM reasoning.
+        LLM-ready context.
 
     sources:
-        metadata preserved for UI citations.
+        citations for UI.
     """
 
 
-    text: str = Field(
-        default="",
-        description="Context text provided to LLM.",
-    )
+    text: str = ""
 
 
     sources: list[Source] = Field(
-        default_factory=list,
-        description="Sources used to build context.",
+        default_factory=list
     )
+
+
+    optimized_context: OptimizedContext | None = None
