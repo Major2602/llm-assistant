@@ -1,9 +1,13 @@
 """
-LangChain → UI event adapter.
+LangChain → UI streaming adapter.
 
-This module is the only UI component aware of LangChain event
-structures. It converts LangChain streaming events into strongly
-typed UI events consumed by the Chainlit handlers.
+Responsibilities:
+- convert LangChain streaming events into UI events;
+- extract streamed LLM tokens;
+- propagate tool lifecycle events;
+- expose web search sources to the UI.
+
+This module is the only layer aware of LangChain event formats.
 """
 
 from __future__ import annotations
@@ -12,7 +16,10 @@ import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
-from langchain_core.messages import AIMessageChunk, ToolMessage
+from langchain_core.messages import (
+    AIMessageChunk,
+    ToolMessage,
+)
 
 from agents.web_search_agent import get_agent
 from ui.events import (
@@ -33,47 +40,45 @@ logger = logging.getLogger(__name__)
 # ==========================================================
 
 
-def _extract_chunk_text(
-    chunk: Any,
-) -> str:
+def _extract_text(chunk: Any) -> str:
     """
-    Extract streamed text from AIMessageChunk.
-
-    Supports current LangChain streaming format.
+    Extract streamed token text from AIMessageChunk.
     """
 
-    if isinstance(chunk, AIMessageChunk):
+    if not isinstance(chunk, AIMessageChunk):
+        return ""
 
-        content = chunk.content
+    content = chunk.content
 
-        if isinstance(content, str):
-            return content
+    if isinstance(content, str):
+        return content
 
-        if isinstance(content, list):
+    if not isinstance(content, list):
+        return ""
 
-            parts: list[str] = []
+    parts: list[str] = []
 
-            for item in content:
+    for item in content:
 
-                if isinstance(item, str):
-                    parts.append(item)
+        if isinstance(item, str):
+            parts.append(item)
+            continue
 
-                elif isinstance(item, dict):
-                    text = item.get("text")
+        if isinstance(item, dict):
 
-                    if text:
-                        parts.append(text)
+            text = item.get("text")
 
-            return "".join(parts)
+            if text:
+                parts.append(text)
 
-    return ""
+    return "".join(parts)
 
 
 def _tool_name(
     event: dict[str, Any],
 ) -> str:
     """
-    Return tool name from LangChain event.
+    Extract tool name from LangChain event.
     """
 
     return (
@@ -87,13 +92,7 @@ def _extract_sources(
     output: Any,
 ) -> list[Source]:
     """
-    Extract Source objects from ToolMessage artifact.
-
-    Expected artifact format:
-
-        {
-            "sources": list[Source]
-        }
+    Extract sources from ToolMessage artifact.
     """
 
     if not isinstance(output, ToolMessage):
@@ -105,22 +104,55 @@ def _extract_sources(
         None,
     )
 
-    if not isinstance(artifact, dict):
+    if not isinstance(
+        artifact,
+        dict,
+    ):
         return []
 
-    sources = artifact.get("sources")
+    raw_sources = artifact.get(
+        "sources",
+        [],
+    )
 
-    if not isinstance(sources, list):
+    if not isinstance(
+        raw_sources,
+        list,
+    ):
         return []
 
-    result: list[Source] = []
+    sources: list[Source] = []
 
-    for source in sources:
+    for item in raw_sources:
 
-        if isinstance(source, Source):
-            result.append(source)
+        if isinstance(
+            item,
+            Source,
+        ):
 
-    return result
+            sources.append(item)
+            continue
+
+        if isinstance(
+            item,
+            dict,
+        ):
+
+            try:
+
+                sources.append(
+                    Source.model_validate(
+                        item
+                    )
+                )
+
+            except Exception:
+
+                logger.warning(
+                    "Skipping invalid source artifact."
+                )
+
+    return sources
 
 
 # ==========================================================
@@ -139,12 +171,11 @@ async def stream_ui_events(
     | DoneEvent
 ]:
     """
-    Convert LangChain streaming events
-    into typed UI events.
+    Stream UI events from LangChain agent.
     """
 
     logger.info(
-        "Starting UI event stream."
+        "Starting streaming session."
     )
 
     agent = get_agent()
@@ -166,16 +197,14 @@ async def stream_ui_events(
 
         ):
 
-            event_name = event.get("event")
-
-            logger.debug(
-                "LangChain event: %s",
-                event_name,
+            event_name = event.get(
+                "event",
+                "",
             )
 
-            # -------------------------------------------------
-            # Token streaming
-            # -------------------------------------------------
+            # ----------------------------------------------
+            # LLM token
+            # ----------------------------------------------
 
             if event_name == "on_chat_model_stream":
 
@@ -185,7 +214,7 @@ async def stream_ui_events(
                     .get("chunk")
                 )
 
-                token = _extract_chunk_text(
+                token = _extract_text(
                     chunk
                 )
 
@@ -197,25 +226,37 @@ async def stream_ui_events(
 
                 continue
 
-            # -------------------------------------------------
-            # Tool started
-            # -------------------------------------------------
+            # ----------------------------------------------
+            # Tool start
+            # ----------------------------------------------
 
             if event_name == "on_tool_start":
 
+                tool = _tool_name(event)
+
+                logger.info(
+                    "Tool started: %s",
+                    tool,
+                )
+
                 yield ToolStartEvent.create(
-                    name=_tool_name(event),
+                    name=tool,
                 )
 
                 continue
 
-            # -------------------------------------------------
-            # Tool finished
-            # -------------------------------------------------
+            # ----------------------------------------------
+            # Tool end
+            # ----------------------------------------------
 
             if event_name == "on_tool_end":
 
                 tool = _tool_name(event)
+
+                logger.info(
+                    "Tool finished: %s",
+                    tool,
+                )
 
                 yield ToolEndEvent.create(
                     name=tool,
@@ -245,7 +286,7 @@ async def stream_ui_events(
                 continue
 
         logger.info(
-            "UI event stream completed."
+            "Streaming completed."
         )
 
         yield DoneEvent.create()
@@ -253,7 +294,7 @@ async def stream_ui_events(
     except Exception as exc:
 
         logger.exception(
-            "UI event stream failed."
+            "Streaming failed."
         )
 
         yield ErrorEvent.create(
