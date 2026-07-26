@@ -1,7 +1,7 @@
 """
 Cloudflare Workers AI Embedding Service.
 
-Baseline architecture v1 position:
+Pipeline position:
 
 Query
  |
@@ -11,44 +11,30 @@ query_preprocessor.py
  v
 cloudflare_embeddings.py
  |
- v
-embedding_retrieval.py
- |
- v
-qdrant_store.py
+ +----------------------+
+ |                      |
+ v                      v
 
-
-Documents:
-
-chunker.py
- |
- v
-filter.py
- |
- v
-cloudflare_embeddings.py
- |
- v
-qdrant_store.py
+embedding_retrieval.py   qdrant_store.py
 
 
 Responsibilities:
 
 - generate query embeddings;
 - generate document embeddings;
-- handle Cloudflare API communication;
-- manage batching;
-- normalize embedding responses.
+- communicate with Cloudflare Workers AI;
+- batch requests;
+- normalize API responses.
 
 
-This module DOES NOT know about:
+This module does NOT know about:
 
-- Exa;
 - documents;
 - chunks;
 - filtering;
+- ranking;
 - reranking;
-- compression;
+- compression logic;
 - Qdrant;
 - agents.
 """
@@ -59,6 +45,7 @@ from __future__ import annotations
 
 import logging
 import os
+
 from typing import Any
 
 
@@ -73,7 +60,9 @@ from tenacity import (
 )
 
 
+
 logger = logging.getLogger(__name__)
+
 
 
 
@@ -82,23 +71,26 @@ logger = logging.getLogger(__name__)
 # ==========================================================
 
 
-REQUEST_TIMEOUT = 60.0
-
-
-EMBEDDING_MODEL = (
-    "@cf/qwen/qwen3-embedding-0.6b"
+REQUEST_TIMEOUT = float(
+    os.getenv(
+        "CF_EMBEDDING_TIMEOUT",
+        "60",
+    )
 )
 
 
-# Conservative Cloudflare batch.
-#
-# Prevents:
-# - request size overflow;
-# - worker timeout;
-# - token limit issues.
-#
-# Can be tuned later.
-MAX_BATCH_SIZE = 32
+EMBEDDING_MODEL = os.getenv(
+    "CF_EMBEDDING_MODEL",
+    "@cf/qwen/qwen3-embedding-0.6b",
+)
+
+
+MAX_BATCH_SIZE = int(
+    os.getenv(
+        "CF_EMBEDDING_BATCH_SIZE",
+        "32",
+    )
+)
 
 
 
@@ -143,6 +135,7 @@ API_URL = (
 
 
 
+
 # ==========================================================
 # Exceptions
 # ==========================================================
@@ -150,8 +143,9 @@ API_URL = (
 
 class CloudflareEmbeddingError(Exception):
     """
-    Embedding service failure.
+    Cloudflare embedding service error.
     """
+
 
 
 
@@ -166,7 +160,7 @@ _client: httpx.AsyncClient | None = None
 
 def get_http_client() -> httpx.AsyncClient:
     """
-    Return shared async HTTP client.
+    Shared async HTTP client.
     """
 
     global _client
@@ -175,7 +169,7 @@ def get_http_client() -> httpx.AsyncClient:
     if _client is None:
 
         logger.info(
-            "Initializing Cloudflare embedding HTTP client."
+            "Initializing Cloudflare embedding client."
         )
 
 
@@ -204,29 +198,40 @@ def get_http_client() -> httpx.AsyncClient:
 
 
 
+
 # ==========================================================
-# Batch utilities
+# Batch helpers
 # ==========================================================
 
 
 def _split_batches(
-    items: list[str],
+    texts: list[str],
 ) -> list[list[str]]:
     """
-    Split texts into safe Cloudflare batches.
+    Split embedding requests into batches.
     """
+
+    if not texts:
+
+        return []
+
 
     return [
 
-        items[i:i + MAX_BATCH_SIZE]
+        texts[index:index + MAX_BATCH_SIZE]
 
-        for i in range(
+        for index in range(
+
             0,
-            len(items),
+
+            len(texts),
+
             MAX_BATCH_SIZE,
+
         )
 
     ]
+
 
 
 
@@ -239,22 +244,18 @@ def _parse_embeddings(
     payload: dict[str, Any],
 ) -> list[list[float]]:
     """
-    Normalize Cloudflare response.
+    Normalize Cloudflare embedding response.
 
-    Supports possible formats:
+    Expected:
 
-    [
-        [...],
-        [...]
-    ]
-
-    or:
-
-    [
-        {
-            "embedding": [...]
+    {
+        "success": true,
+        "result": {
+            "data": [
+                [...]
+            ]
         }
-    ]
+    }
     """
 
     if not payload.get(
@@ -264,13 +265,11 @@ def _parse_embeddings(
 
         raise CloudflareEmbeddingError(
 
-            str(
-                payload.get(
-                    "errors"
-                )
-            )
+            f"Cloudflare error: "
+            f"{payload.get('errors')}"
 
         )
+
 
 
     result = payload.get(
@@ -284,8 +283,9 @@ def _parse_embeddings(
     ):
 
         raise CloudflareEmbeddingError(
-            "Missing result object."
+            "Invalid embedding result."
         )
+
 
 
     data = result.get(
@@ -299,7 +299,7 @@ def _parse_embeddings(
     ):
 
         raise CloudflareEmbeddingError(
-            "Invalid embedding response."
+            "Embedding data missing."
         )
 
 
@@ -317,14 +317,27 @@ def _parse_embeddings(
         ):
 
             embeddings.append(
-                item
+
+                [
+
+                    float(value)
+
+                    for value in item
+
+                ]
+
             )
 
 
-        elif isinstance(
+            continue
+
+
+
+        if isinstance(
             item,
             dict,
         ):
+
 
             vector = item.get(
                 "embedding"
@@ -337,12 +350,29 @@ def _parse_embeddings(
             ):
 
                 embeddings.append(
-                    vector
+
+                    [
+
+                        float(value)
+
+                        for value in vector
+
+                    ]
+
                 )
 
 
 
+    if not embeddings:
+
+        raise CloudflareEmbeddingError(
+            "No embeddings returned."
+        )
+
+
+
     return embeddings
+
 
 
 
@@ -353,12 +383,12 @@ def _parse_embeddings(
 
 class CloudflareEmbeddings:
     """
-    Cloudflare embedding service.
+    Cloudflare Workers AI embedding wrapper.
 
     Used by:
 
     - embedding retrieval;
-    - Qdrant storage;
+    - Qdrant dense vectors;
     - semantic compression.
     """
 
@@ -379,9 +409,7 @@ class CloudflareEmbeddings:
         ),
 
         retry=retry_if_exception_type(
-
             httpx.HTTPError
-
         ),
 
         reraise=True,
@@ -396,7 +424,7 @@ class CloudflareEmbeddings:
     ) -> list[list[float]]:
 
         """
-        Execute embedding request.
+        Send embedding request.
         """
 
         if not texts:
@@ -445,16 +473,18 @@ class CloudflareEmbeddings:
 
                     "Embedding count mismatch. "
 
-                    f"Expected {len(texts)}, "
+                    f"Expected={len(texts)} "
 
-                    f"received {len(embeddings)}"
+                    f"Received={len(embeddings)}"
 
                 )
 
             )
 
 
+
         return embeddings
+
 
 
 
@@ -467,7 +497,12 @@ class CloudflareEmbeddings:
     ) -> list[list[float]]:
 
         """
-        Generate embeddings for documents/chunks.
+        Generate embeddings for documents.
+
+        Used for:
+
+        - chunks;
+        - Qdrant dense vectors.
         """
 
         if not texts:
@@ -476,51 +511,64 @@ class CloudflareEmbeddings:
 
 
 
+        clean_texts = [
+
+            text.strip()
+
+            for text in texts
+
+            if text and text.strip()
+
+        ]
+
+
+
+        if not clean_texts:
+
+            return []
+
+
+
         logger.info(
 
-            "Embedding documents count=%d",
+            "Generating document embeddings. count=%d",
 
-            len(texts),
+            len(clean_texts),
 
         )
 
 
 
-        batches = _split_batches(
-            texts
-        )
-
-
-        result: list[list[float]] = []
+        embeddings: list[list[float]] = []
 
 
 
-        for batch in batches:
+        for batch in _split_batches(
+            clean_texts
+        ):
 
 
-            embeddings = await self._request(
-
+            batch_embeddings = await self._request(
                 batch
-
             )
 
 
-            result.extend(
-                embeddings
+            embeddings.extend(
+                batch_embeddings
             )
 
 
 
-        logger.info(
+        if len(embeddings) != len(clean_texts):
 
-            "Generated %d document embeddings.",
-
-            len(result),
-
-        )
+            raise CloudflareEmbeddingError(
+                "Final embedding count mismatch."
+            )
 
 
-        return result
+
+        return embeddings
+
 
 
 
@@ -533,13 +581,17 @@ class CloudflareEmbeddings:
     ) -> list[float]:
 
         """
-        Generate embedding for user query.
+        Generate embedding for search query.
         """
 
-        if not query.strip():
+        query = query.strip()
+
+
+
+        if not query:
 
             raise CloudflareEmbeddingError(
-                "Cannot embed empty query."
+                "Query cannot be empty."
             )
 
 
@@ -554,17 +606,16 @@ class CloudflareEmbeddings:
 
 
 
-        if not embeddings:
+        if len(embeddings) != 1:
 
             raise CloudflareEmbeddingError(
-
-                "Empty query embedding."
-
+                "Invalid query embedding response."
             )
 
 
 
         return embeddings[0]
+
 
 
 
@@ -580,9 +631,6 @@ _embedding_service: CloudflareEmbeddings | None = None
 def get_embedding_model() -> CloudflareEmbeddings:
     """
     Return singleton embedding service.
-
-    Singleton is intentionally preserved
-    for Render free tier compatibility.
     """
 
     global _embedding_service
@@ -590,9 +638,8 @@ def get_embedding_model() -> CloudflareEmbeddings:
 
     if _embedding_service is None:
 
-
         logger.info(
-            "Initializing CloudflareEmbeddings singleton."
+            "Creating Cloudflare embedding singleton."
         )
 
 
