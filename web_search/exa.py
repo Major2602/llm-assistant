@@ -1,30 +1,57 @@
 """
-Exa search integration layer.
+Exa web search retrieval layer.
+
+Baseline Architecture v1:
+
+USER QUERY
+    |
+    v
+Query preprocessing
+    |
+    v
+Exa Search
+    |
+    v
+Document normalization
+    |
+    v
+chunker.py
+
 
 Responsibilities:
-- execute Exa web search;
-- normalize Exa documents;
-- return clean documents for downstream processing.
 
-This module does not know about:
+- execute Exa search;
+- retrieve documents;
+- normalize metadata;
+- return WebDocument models.
+
+
+This module does NOT know about:
+
 - chunking;
 - filtering;
 - embeddings;
 - reranking;
 - Qdrant;
-- LLM context formatting.
+- LLM.
 """
+
 
 from __future__ import annotations
 
+
 import logging
 import os
+
 from typing import Any
 
-from langchain_exa import ExaSearchRetriever
+from exa_py import AsyncExa
+
+from web_search.models import WebDocument
 
 
 logger = logging.getLogger(__name__)
+
 
 
 # ==========================================================
@@ -32,7 +59,7 @@ logger = logging.getLogger(__name__)
 # ==========================================================
 
 
-EXA_TOKEN = os.getenv(
+EXA_API_KEY = os.getenv(
     "EXA_TOKEN"
 )
 
@@ -40,97 +67,50 @@ EXA_TOKEN = os.getenv(
 EXA_RESULTS = int(
     os.getenv(
         "EXA_RESULTS",
-        "5",
+        "100",
     )
 )
 
 
+
+if not EXA_API_KEY:
+
+    raise RuntimeError(
+        "Environment variable EXA_TOKEN is not configured."
+    )
+
+
+
 # ==========================================================
-# Exa client
+# Client
 # ==========================================================
 
 
-_retriever: ExaSearchRetriever | None = None
+_client: AsyncExa | None = None
 
 
 
-def get_exa_retriever() -> ExaSearchRetriever:
+def get_exa_client() -> AsyncExa:
     """
-    Lazily initialize Exa retriever.
+    Return singleton Exa client.
     """
 
-    global _retriever
+    global _client
 
 
-    if _retriever is not None:
-        return _retriever
+    if _client is None:
 
-
-    if not EXA_TOKEN:
-
-        logger.error(
-            "Environment variable EXA_TOKEN is not configured."
+        logger.info(
+            "Initializing Exa client."
         )
 
-        raise RuntimeError(
-            "Environment variable EXA_TOKEN is not configured."
+
+        _client = AsyncExa(
+            api_key=EXA_API_KEY
         )
 
 
-    logger.info(
-        "Initializing ExaSearchRetriever."
-    )
-
-
-    _retriever = ExaSearchRetriever(
-        exa_api_key=EXA_TOKEN,
-        k=EXA_RESULTS,
-        text_contents=True,
-    )
-
-
-    logger.info(
-        "ExaSearchRetriever initialized successfully."
-    )
-
-
-    return _retriever
-
-
-
-# ==========================================================
-# Search
-# ==========================================================
-
-
-async def _search(
-    query: str,
-) -> list[Any]:
-    """
-    Execute Exa search.
-    """
-
-    logger.info(
-        "Searching Exa for query='%s'.",
-        query,
-    )
-
-
-    retriever = get_exa_retriever()
-
-
-    documents = await retriever.ainvoke(
-        query
-    )
-
-
-    logger.info(
-        "Exa returned %d documents.",
-        len(documents),
-    )
-
-
-    return documents
+    return _client
 
 
 
@@ -142,38 +122,19 @@ async def _search(
 def _normalize_document(
     document: Any,
     query: str,
-) -> dict[str, Any] | None:
+) -> WebDocument | None:
     """
-    Convert Exa document into internal format.
-
-    Keeps full document text.
-    Chunking is intentionally handled elsewhere.
+    Convert Exa response into internal model.
     """
-
-
-    metadata = (
-
-        document.metadata
-
-        if hasattr(
-            document,
-            "metadata",
-        )
-
-        else {}
-    )
 
 
     text = (
-
         getattr(
             document,
-            "page_content",
-            "",
+            "text",
+            None,
         )
-
         or ""
-
     ).strip()
 
 
@@ -188,52 +149,108 @@ def _normalize_document(
 
 
 
-    return {
+    return WebDocument(
 
-        "query": query,
+        query=query,
 
 
-        "title": (
-            metadata.get("title")
+        title=(
+
+            getattr(
+                document,
+                "title",
+                None,
+            )
+
             or "Untitled"
+
         ),
 
 
-        "url": (
+        url=(
 
-            metadata.get("url")
-
-            or metadata.get("source")
-
-            or metadata.get("link")
+            getattr(
+                document,
+                "url",
+                None,
+            )
 
             or ""
 
         ),
 
 
-        # Full Exa content.
-        # No chunking here.
-        "text": text,
+        text=text,
 
 
-        "provider": "exa",
+        provider="exa",
 
 
-        "published_date": (
-            metadata.get(
-                "published_date"
+        published_date=(
+
+            getattr(
+                document,
+                "published_date",
+                None,
             )
+
         ),
 
 
-        "author": (
-            metadata.get(
-                "author"
+        author=(
+
+            getattr(
+                document,
+                "author",
+                None,
             )
+
         ),
 
-    }
+    )
+
+
+
+# ==========================================================
+# Search
+# ==========================================================
+
+
+async def _search(
+    query: str,
+) -> list[Any]:
+    """
+    Execute Exa search request.
+    """
+
+
+    client = get_exa_client()
+
+
+    logger.info(
+        "Searching Exa. query=%s",
+        query,
+    )
+
+
+
+    response = await client.search_and_contents(
+
+        query=query,
+
+
+        num_results=EXA_RESULTS,
+
+
+        text=True,
+
+
+        type="auto",
+
+    )
+
+
+    return response.results
 
 
 
@@ -244,34 +261,44 @@ def _normalize_document(
 
 async def search_exa(
     query: str,
-) -> list[dict[str, Any]]:
+) -> list[WebDocument]:
     """
-    Search web using Exa.
+    Search Exa and return normalized documents.
 
-    Pipeline stage:
+
+    Pipeline:
+
+        Query
+
+          |
+
+          v
 
         Exa
-          |
-          v
-        documents
-          |
-          v
-        filter.py
-          |
-          v
-        chunker.py
-          |
-          v
-        embeddings
 
-    Returns normalized full documents.
+          |
+
+          v
+
+        WebDocument
+
+          |
+
+          v
+
+        chunker.py
     """
 
 
-    logger.info(
-        "Starting Exa web search for '%s'.",
-        query,
-    )
+    query = query.strip()
+
+
+
+    if not query:
+
+        raise ValueError(
+            "Query cannot be empty."
+        )
 
 
 
@@ -283,52 +310,52 @@ async def search_exa(
 
     if not documents:
 
-        logger.warning(
-            "Exa returned no results for '%s'.",
-            query,
-        )
-
         raise ValueError(
-            f"No Exa search results for '{query}'."
+            "Exa returned no documents."
         )
 
 
 
-    normalized_documents: list[
-        dict[str, Any]
-    ] = []
+    normalized: list[WebDocument] = []
 
 
 
     for document in documents:
 
-        normalized = _normalize_document(
+
+        item = _normalize_document(
+
             document,
+
             query,
+
         )
 
 
-        if normalized is not None:
+        if item:
 
-            normalized_documents.append(
-                normalized
+            normalized.append(
+                item
             )
 
 
 
     logger.info(
-        "Prepared %d normalized Exa documents.",
-        len(normalized_documents),
+
+        "Exa normalized documents=%d",
+
+        len(normalized),
+
     )
 
 
 
-    if not normalized_documents:
+    if not normalized:
 
         raise ValueError(
-            "Exa returned no usable documents."
+            "No usable Exa documents."
         )
 
 
 
-    return normalized_documents
+    return normalized
