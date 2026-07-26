@@ -350,7 +350,7 @@ def _remove_duplicates(
 # ==========================================================
 
 
-def filter_documents(
+def filter_chunks(
     chunks: list[dict[str, Any]],
     query: str,
 ) -> list[dict[str, Any]]:
