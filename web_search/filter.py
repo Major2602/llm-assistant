@@ -1,12 +1,30 @@
 """
-Cheap document filtering layer.
+Chunk-level filtering layer.
 
 Responsibilities:
-- remove low quality Exa documents;
-- score documents using cheap heuristics;
-- select best documents before chunking.
+- remove low quality chunks;
+- score chunks using cheap heuristics;
+- select best chunks before reranking.
+
+Pipeline position:
+
+Exa
+ |
+ v
+chunker.py
+ |
+ v
+filter.py
+ |
+ v
+reranker.py
+ |
+ v
+qdrant_store.py
+
 
 This module does not know about:
+- Exa API;
 - embeddings;
 - reranking models;
 - Qdrant;
@@ -28,10 +46,9 @@ logger = logging.getLogger(__name__)
 # ==========================================================
 
 
-MIN_DOCUMENT_LENGTH = 800
+MIN_CHUNK_LENGTH = 200
 
-MAX_DOCUMENTS = 5
-
+MAX_CHUNKS = 50
 
 MIN_SCORE = 0.25
 
@@ -46,7 +63,7 @@ def _normalize_text(
     text: str,
 ) -> str:
     """
-    Normalize text for comparison.
+    Normalize text for keyword comparison.
     """
 
     return re.sub(
@@ -84,10 +101,10 @@ def _tokenize(
 
 def _keyword_score(
     query: str,
-    document: dict[str, Any],
+    chunk: dict[str, Any],
 ) -> float:
     """
-    Cheap keyword overlap score.
+    Calculate query/chunk keyword relevance.
     """
 
     query_words = _tokenize(
@@ -100,7 +117,7 @@ def _keyword_score(
 
 
     title_words = _tokenize(
-        document.get(
+        chunk.get(
             "title",
             "",
         )
@@ -108,7 +125,7 @@ def _keyword_score(
 
 
     text_words = _tokenize(
-        document.get(
+        chunk.get(
             "text",
             "",
         )
@@ -128,13 +145,13 @@ def _keyword_score(
     score = 0.0
 
 
-    # Title has stronger signal.
+    # Title contains strong relevance signal.
     score += (
         title_match
         /
         len(query_words)
         *
-        0.6
+        0.5
     )
 
 
@@ -143,7 +160,7 @@ def _keyword_score(
         /
         len(query_words)
         *
-        0.4
+        0.5
     )
 
 
@@ -155,13 +172,13 @@ def _keyword_score(
 
 
 def _quality_score(
-    document: dict[str, Any],
+    chunk: dict[str, Any],
 ) -> float:
     """
-    Estimate document quality.
+    Estimate chunk information quality.
     """
 
-    text = document.get(
+    text = chunk.get(
         "text",
         "",
     )
@@ -172,18 +189,12 @@ def _quality_score(
     )
 
 
-    if length < MIN_DOCUMENT_LENGTH:
+    if length < MIN_CHUNK_LENGTH:
         return 0.0
 
 
+
     score = 1.0
-
-
-
-    # Very long documents are not bad,
-    # but reduce priority slightly.
-    if length > 50000:
-        score -= 0.15
 
 
 
@@ -192,9 +203,25 @@ def _quality_score(
     )
 
 
-    # Low unique word ratio.
-    if len(words) < 100:
-        score -= 0.25
+    # Penalize chunks with little information.
+    if len(words) < 30:
+        score -= 0.3
+
+
+
+    # Penalize excessive repetition.
+    unique_ratio = (
+        len(words)
+        /
+        max(
+            len(text.split()),
+            1,
+        )
+    )
+
+
+    if unique_ratio < 0.4:
+        score -= 0.2
 
 
 
@@ -205,29 +232,66 @@ def _quality_score(
 
 
 
-def _calculate_score(
-    query: str,
-    document: dict[str, Any],
+def _position_score(
+    chunk: dict[str, Any],
 ) -> float:
     """
-    Combined cheap ranking score.
+    Prefer early chunks from a document.
+
+    First chunks usually contain:
+    - introduction;
+    - definitions;
+    - main topic context.
+    """
+
+    index = chunk.get(
+        "chunk_index",
+        0,
+    )
+
+
+    if index == 0:
+        return 1.0
+
+
+    if index <= 2:
+        return 0.8
+
+
+    return 0.5
+
+
+
+def _calculate_score(
+    query: str,
+    chunk: dict[str, Any],
+) -> float:
+    """
+    Combined chunk relevance score.
     """
 
     keyword = _keyword_score(
         query,
-        document,
+        chunk,
     )
 
 
     quality = _quality_score(
-        document,
+        chunk,
+    )
+
+
+    position = _position_score(
+        chunk,
     )
 
 
     return (
-        keyword * 0.7
+        keyword * 0.6
         +
         quality * 0.3
+        +
+        position * 0.1
     )
 
 
@@ -238,37 +302,42 @@ def _calculate_score(
 
 
 def _remove_duplicates(
-    documents: list[dict[str, Any]],
+    chunks: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """
-    Remove documents with identical URLs.
+    Remove identical chunks.
     """
 
     result = []
 
-    seen_urls: set[str] = set()
+    seen_texts: set[str] = set()
 
 
-    for document in documents:
+    for chunk in chunks:
 
-        url = document.get(
-            "url",
-            "",
+        text = (
+            chunk.get(
+                "text",
+                "",
+            )
+            .strip()
         )
 
 
-        if url and url in seen_urls:
+        fingerprint = text[:300]
+
+
+        if fingerprint in seen_texts:
             continue
 
 
-        if url:
-            seen_urls.add(
-                url
-            )
+        seen_texts.add(
+            fingerprint
+        )
 
 
         result.append(
-            document
+            chunk
         )
 
 
@@ -282,50 +351,54 @@ def _remove_duplicates(
 
 
 def filter_documents(
-    documents: list[dict[str, Any]],
+    chunks: list[dict[str, Any]],
     query: str,
 ) -> list[dict[str, Any]]:
     """
-    Filter and rank Exa documents.
+    Filter and rank chunks before reranking.
 
     Input:
 
-        Exa documents
+        chunks from chunker.py
+
 
     Output:
 
-        Top documents for chunking
+        candidate chunks for reranker.py
     """
 
     logger.info(
-        "Filtering %d Exa documents.",
-        len(documents),
+        "Filtering %d chunks.",
+        len(chunks),
     )
 
 
-    documents = _remove_duplicates(
-        documents
+    chunks = _remove_duplicates(
+        chunks
     )
 
 
-    scored_documents: list[
+    scored_chunks: list[
         tuple[float, dict[str, Any]]
     ] = []
 
 
-    for document in documents:
+    for chunk in chunks:
 
         score = _calculate_score(
             query,
-            document,
+            chunk,
         )
 
 
         logger.debug(
-            "Document score %.3f title=%s",
+            "Chunk score %.3f title=%s index=%s",
             score,
-            document.get(
+            chunk.get(
                 "title"
+            ),
+            chunk.get(
+                "chunk_index"
             ),
         )
 
@@ -334,19 +407,19 @@ def filter_documents(
             continue
 
 
-        document["filter_score"] = score
+        chunk["filter_score"] = score
 
 
-        scored_documents.append(
+        scored_chunks.append(
             (
                 score,
-                document,
+                chunk,
             )
         )
 
 
 
-    scored_documents.sort(
+    scored_chunks.sort(
         key=lambda item: item[0],
         reverse=True,
     )
@@ -355,18 +428,18 @@ def filter_documents(
 
     selected = [
 
-        document
+        chunk
 
-        for _, document
+        for _, chunk
 
-        in scored_documents[:MAX_DOCUMENTS]
+        in scored_chunks[:MAX_CHUNKS]
 
     ]
 
 
 
     logger.info(
-        "Selected %d documents after filtering.",
+        "Selected %d chunks after filtering.",
         len(selected),
     )
 
