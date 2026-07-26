@@ -1,7 +1,7 @@
 """
 Exa web search retrieval layer.
 
-Baseline Architecture v1:
+Pipeline position:
 
 USER QUERY
     |
@@ -12,7 +12,7 @@ Query preprocessing
 Exa Search
     |
     v
-Document normalization
+WebDocument
     |
     v
 chunker.py
@@ -36,22 +36,26 @@ This module does NOT know about:
 - LLM.
 """
 
-
 from __future__ import annotations
 
 
 import logging
 import os
 
+from datetime import datetime, timezone
+
 from typing import Any
+
 
 from exa_py import AsyncExa
 
-from web_search.models import WebDocument
+
+from web_search.models import (
+    WebDocument,
+)
 
 
 logger = logging.getLogger(__name__)
-
 
 
 # ==========================================================
@@ -72,9 +76,7 @@ EXA_RESULTS = int(
 )
 
 
-
 if not EXA_API_KEY:
-
     raise RuntimeError(
         "Environment variable EXA_TOKEN is not configured."
     )
@@ -104,7 +106,6 @@ def get_exa_client() -> AsyncExa:
             "Initializing Exa client."
         )
 
-
         _client = AsyncExa(
             api_key=EXA_API_KEY
         )
@@ -119,14 +120,36 @@ def get_exa_client() -> AsyncExa:
 # ==========================================================
 
 
+def _current_timestamp() -> int:
+    """
+    Return UTC unix timestamp.
+    """
+
+    return int(
+        datetime.now(
+            timezone.utc
+        ).timestamp()
+    )
+
+
+
 def _normalize_document(
     document: Any,
     query: str,
 ) -> WebDocument | None:
     """
     Convert Exa response into internal model.
-    """
 
+    Exa output:
+
+        external object
+
+            |
+
+            v
+
+        WebDocument
+    """
 
     text = (
         getattr(
@@ -136,7 +159,6 @@ def _normalize_document(
         )
         or ""
     ).strip()
-
 
 
     if not text:
@@ -162,7 +184,9 @@ def _normalize_document(
                 None,
             )
 
-            or "Untitled"
+            or
+
+            "Untitled"
 
         ),
 
@@ -175,7 +199,9 @@ def _normalize_document(
                 None,
             )
 
-            or ""
+            or
+
+            ""
 
         ),
 
@@ -186,26 +212,24 @@ def _normalize_document(
         provider="exa",
 
 
-        published_date=(
-
-            getattr(
-                document,
-                "published_date",
-                None,
-            )
-
+        author=getattr(
+            document,
+            "author",
+            None,
         ),
 
 
-        author=(
-
-            getattr(
-                document,
-                "author",
-                None,
-            )
-
+        published_date=getattr(
+            document,
+            "published_date",
+            None,
         ),
+
+
+        created_at=_current_timestamp(),
+
+
+        last_access=_current_timestamp(),
 
     )
 
@@ -222,7 +246,6 @@ async def _search(
     """
     Execute Exa search request.
     """
-
 
     client = get_exa_client()
 
@@ -265,33 +288,16 @@ async def search_exa(
     """
     Search Exa and return normalized documents.
 
+    Output:
 
-    Pipeline:
+        list[WebDocument]
 
-        Query
-
-          |
-
-          v
-
-        Exa
-
-          |
-
-          v
-
-        WebDocument
-
-          |
-
-          v
+    Next stage:
 
         chunker.py
     """
 
-
     query = query.strip()
-
 
 
     if not query:
@@ -307,7 +313,6 @@ async def search_exa(
     )
 
 
-
     if not documents:
 
         raise ValueError(
@@ -321,7 +326,6 @@ async def search_exa(
 
 
     for document in documents:
-
 
         item = _normalize_document(
 
