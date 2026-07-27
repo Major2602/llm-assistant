@@ -95,16 +95,9 @@ def _sanitize_query(
 
 def preprocess_query(
     query: str,
-) -> SearchQuery:
+) -> NormalizedQuery:
     """
-    Convert raw user query into SearchQuery.
-
-    The agentic LLM is responsible for:
-
-    - intent detection;
-    - tool selection;
-    - query rewriting;
-    - language understanding.
+    Convert raw user query into NormalizedQuery.
     """
 
     if not query or not query.strip():
