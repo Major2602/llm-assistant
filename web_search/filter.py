@@ -256,7 +256,7 @@ def _metadata_score(
         score += 0.4
 
 
-    if chunk.source.id:
+    if chunk.source.domain:
 
         score += 0.2
 
