@@ -1,38 +1,13 @@
 """
 Minimal query preprocessing layer.
 
-Pipeline position:
-
-USER QUERY
-    |
-    v
-Query preprocessing
-    |
-    v
-SearchQuery
-    |
-    v
-Agent / Retrieval pipeline
-
-
-Responsibilities:
+Module Responsibilities:
 
 - sanitize user input;
 - normalize whitespace;
 - prevent malformed queries;
 - preserve semantic meaning;
-- create SearchQuery contract.
-
-
-This module does NOT:
-
-- classify intent;
-- detect language;
-- expand queries;
-- call LLM;
-- call agents;
-- call search providers;
-- rank results.
+- create NormalizedQuery contract.
 """
 
 
@@ -43,7 +18,9 @@ import logging
 import re
 
 
-from web_search.models import SearchQuery
+from web_search.models import NormalizedQuery
+
+from datetime import datetime, UTC
 
 
 logger = logging.getLogger(__name__)
@@ -149,11 +126,13 @@ def preprocess_query(
         )
 
 
-    result = SearchQuery(
+    result = NormalizedQuery(
 
         original=query,
 
         normalized=normalized,
+
+        created_at=int(datetime.now(UTC).timestamp())
 
     )
 
