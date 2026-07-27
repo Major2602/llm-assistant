@@ -1,23 +1,6 @@
 """
 Final context optimization layer.
 
-Pipeline position:
-
-Compressed chunks
-        |
-        v
-Context optimization
-        |
-        v
-AgentContext
-        |
-        +----------------+
-        |                |
-        v                v
-
-    Groq LLM        Citations
-
-
 Responsibilities:
 
 - prepare LLM context;
@@ -25,15 +8,6 @@ Responsibilities:
 - preserve citations;
 - create source mapping;
 - build final AgentContext.
-
-
-Does NOT:
-
-- call LLM;
-- call Exa;
-- generate embeddings;
-- rerank;
-- access Qdrant.
 """
 
 
@@ -48,7 +22,8 @@ from typing import Any
 
 from web_search.models import (
     AgentContext,
-    ContextDocument,
+    ContextDocument
+    CompressedChunk,
     OptimizedContext,
     Source,
 )
@@ -98,92 +73,47 @@ def _estimate_tokens(
 
 
 def _sort_chunks(
-    chunks: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
+    chunks: list[CompressedChunk],
+) -> list[CompressedChunk]:
     """
     Sort compressed chunks by relevance.
-
-    Priority:
-
-    1. rerank_score
-    2. similarity_score
-    3. filter_score
     """
 
     return sorted(
+            
         chunks,
+            
         key=lambda chunk: (
 
-            chunk.get(
-                "rerank_score",
-                0.0,
-            )
-
-            or
-
-            chunk.get(
-                "similarity_score",
-                0.0,
-            )
-
-            or
-
-            chunk.get(
-                "filter_score",
-                0.0,
-            )
+            chunk.rerank_score
+                
+            or chunk.similarity_score
+            
+            or chunk.filter_score
 
             or 0.0
 
         ),
+            
         reverse=True,
+            
     )
 
 
 
 def _build_source(
-    chunk: dict[str, Any],
+    chunk: CompressedChunk,
 ) -> Source:
     """
     Convert chunk metadata into citation source.
     """
 
-    return Source(
-
-        title=(
-            chunk.get(
-                "title"
-            )
-            or
-            "Untitled source"
-        ),
-
-        url=(
-            chunk.get(
-                "url"
-            )
-            or
-            ""
-        ),
-
-        provider=chunk.get(
-            "provider"
-        ),
-
-        author=chunk.get(
-            "author"
-        ),
-
-        published_date=chunk.get(
-            "published_date"
-        ),
-
-    )
+    return chunk.source
 
 
 
 def _extract_sources(
-    chunks: list[dict[str, Any]],
+    chunks: list[CompressedChunk],
 ) -> list[Source]:
     """
     Extract unique citation sources.
@@ -235,7 +165,7 @@ def _extract_sources(
 
 
 def _build_documents(
-    chunks: list[dict[str, Any]],
+    chunks: list[CompressedChunk],
 ) -> list[ContextDocument]:
     """
     Convert compressed chunks into context documents.
@@ -249,16 +179,9 @@ def _build_documents(
 
         text = (
 
-            chunk.get(
-                "compressed_text"
-            )
+            chunk.compressed_text
 
-            or
-
-            chunk.get(
-                "text",
-                "",
-            )
+            or chunk.text
 
         )
 
@@ -271,21 +194,11 @@ def _build_documents(
 
         score = (
 
-            chunk.get(
-                "rerank_score"
-            )
+            chunk.rerank_score
 
-            or
+            or chunk.similarity_score
 
-            chunk.get(
-                "similarity_score"
-            )
-
-            or
-
-            chunk.get(
-                "filter_score"
-            )
+            or chunk.filter_score
 
             or 0.0
 
@@ -296,11 +209,11 @@ def _build_documents(
 
             ContextDocument(
 
+                chunk_id=chunk.id,
+
                 text=text,
 
-                source=_build_source(
-                    chunk
-                ),
+                source=chunk.source,
 
                 relevance_score=score,
 
@@ -410,19 +323,10 @@ def _build_citation_map(
 
 def optimize_context(
     query: str,
-    chunks: list[dict[str, Any]],
+    chunks: list[CompressedChunk],
 ) -> AgentContext:
     """
     Prepare final context for agent.
-
-    Input:
-
-        CompressedChunk list
-
-
-    Output:
-
-        AgentContext
     """
 
     if not chunks:
