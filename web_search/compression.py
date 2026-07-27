@@ -1,55 +1,78 @@
 """
 Extractive compression layer.
 
-Pipeline:
+Pipeline position:
 
-Ranked chunks
-      |
-      v
-Compression
-      |
-      v
-Compressed chunks
-      |
-      v
-Context optimization
+Cloudflare reranker
+        |
+        v
+compression.py
+        |
+        v
+Context optimizer
+
 
 Responsibilities:
 
 - reduce chunk size;
-- keep query-relevant sentences;
-- remove duplicates;
-- preserve metadata.
+- keep most relevant sentences;
+- preserve citations;
+- preserve metadata;
+- remove redundant information.
+
 
 Does NOT:
 
 - call LLM;
-- generate embeddings;
-- rerank;
-- access storage.
+- call external APIs;
+- access Qdrant;
+- modify ranking logic.
 """
+
 
 from __future__ import annotations
 
+
 import logging
 import re
+
+
 from typing import Any
 
-from web_search.models import CompressedChunk
+
+import numpy as np
+
+
+from web_search.cloudflare_embeddings import (
+    get_embedding_model,
+)
+
+
+from web_search.models import (
+    CompressedChunk,
+)
 
 
 logger = logging.getLogger(__name__)
+
 
 
 # ==========================================================
 # Configuration
 # ==========================================================
 
-MAX_SENTENCES_PER_CHUNK = 5
+
+MAX_SENTENCES = 5
+
+
+MAX_COMPRESSED_CHARS = 1200
+
 
 MIN_SENTENCE_LENGTH = 40
 
-MAX_COMPRESSED_LENGTH = 1200
+
+SIMILARITY_THRESHOLD = 0.85
+
 
 
 # ==========================================================
@@ -57,99 +80,235 @@ MAX_COMPRESSED_LENGTH = 1200
 # ==========================================================
 
 
-def _split_sentences(text: str) -> list[str]:
+def _split_sentences(
+    text: str,
+) -> list[str]:
     """
-    Split text into meaningful sentences.
+    Split text into sentences.
     """
 
     if not text:
         return []
+
 
     sentences = re.split(
         r"(?<=[.!?])\s+",
         text.strip(),
     )
 
+
     return [
+
         sentence.strip()
+
         for sentence in sentences
-        if len(sentence.strip()) >= MIN_SENTENCE_LENGTH
+
+        if len(sentence.strip())
+        >= MIN_SENTENCE_LENGTH
+
     ]
 
 
 
-def _normalize(text: str) -> str:
+def _cosine_similarity(
+    a: list[float],
+    b: list[float],
+) -> float:
     """
-    Normalize text for lexical comparison.
+    Calculate cosine similarity.
     """
 
-    return re.sub(
-        r"[^a-zA-Zа-яА-Я0-9 ]+",
-        " ",
-        text.lower(),
+    vec_a = np.asarray(
+        a,
+        dtype=np.float32,
+    )
+
+
+    vec_b = np.asarray(
+        b,
+        dtype=np.float32,
+    )
+
+
+    denominator = (
+
+        np.linalg.norm(vec_a)
+
+        *
+
+        np.linalg.norm(vec_b)
+
+    )
+
+
+    if denominator == 0:
+
+        return 0.0
+
+
+    return float(
+
+        np.dot(
+            vec_a,
+            vec_b,
+        )
+
+        /
+
+        denominator
+
     )
 
 
 
-def _keywords(text: str) -> set[str]:
-    """
-    Extract keywords.
-    """
-
-    return {
-        word
-        for word in _normalize(text).split()
-        if len(word) > 3
-    }
+# ==========================================================
+# Sentence ranking
+# ==========================================================
 
 
-
-def _sentence_score(
+async def _rank_sentences(
     query: str,
-    sentence: str,
-) -> float:
-    """
-    Lightweight relevance scoring.
-
-    Future replacement:
-    sentence embeddings + cosine similarity.
-    """
-
-    query_words = _keywords(query)
-
-    if not query_words:
-        return 0.0
-
-    sentence_words = _keywords(sentence)
-
-    return len(
-        query_words & sentence_words
-    ) / len(query_words)
-
-
-
-def _remove_duplicates(
     sentences: list[str],
+) -> list[tuple[str, float]]:
+    """
+    Rank sentences by query similarity.
+    """
+
+    if not sentences:
+
+        return []
+
+
+    embedder = get_embedding_model()
+
+
+    query_vector = await embedder.embed_query(
+        query
+    )
+
+
+    sentence_vectors = await embedder.embed_documents(
+        sentences
+    )
+
+
+    ranked = []
+
+
+    for sentence, vector in zip(
+        sentences,
+        sentence_vectors,
+    ):
+
+        score = _cosine_similarity(
+            query_vector,
+            vector,
+        )
+
+
+        ranked.append(
+            (
+                sentence,
+                score,
+            )
+        )
+
+
+    ranked.sort(
+        key=lambda item: item[1],
+        reverse=True,
+    )
+
+
+    return ranked
+
+
+
+# ==========================================================
+# Redundancy removal
+# ==========================================================
+
+
+def _remove_redundant(
+    ranked_sentences: list[tuple[str, float]],
 ) -> list[str]:
     """
-    Remove duplicate sentences.
+    Remove semantically similar sentences.
+
+    Uses score order.
     """
 
-    result = []
+    selected: list[str] = []
 
-    seen = set()
 
-    for sentence in sentences:
+    for sentence, _ in ranked_sentences:
 
-        fingerprint = sentence[:150].lower()
 
-        if fingerprint in seen:
+        if not selected:
+
+            selected.append(
+                sentence
+            )
+
             continue
 
-        seen.add(fingerprint)
-        result.append(sentence)
 
-    return result
+
+        duplicate = False
+
+
+        sentence_words = set(
+            sentence.lower().split()
+        )
+
+
+        for existing in selected:
+
+            existing_words = set(
+                existing.lower().split()
+            )
+
+
+            overlap = (
+
+                len(
+                    sentence_words
+                    &
+                    existing_words
+                )
+
+                /
+
+                max(
+                    len(sentence_words),
+                    1,
+                )
+
+            )
+
+
+            if overlap >= SIMILARITY_THRESHOLD:
+
+                duplicate = True
+
+                break
+
+
+
+        if not duplicate:
+
+            selected.append(
+                sentence
+            )
+
+
+        if len(selected) >= MAX_SENTENCES:
+
+            break
+
+
+
+    return selected
 
 
 
@@ -158,12 +317,12 @@ def _remove_duplicates(
 # ==========================================================
 
 
-def compress_chunk(
+async def _compress_chunk(
     query: str,
     chunk: dict[str, Any],
-) -> dict[str, Any]:
+) -> CompressedChunk:
     """
-    Compress single ranked chunk.
+    Compress single chunk.
     """
 
     text = chunk.get(
@@ -171,78 +330,56 @@ def compress_chunk(
         "",
     )
 
-    if not text:
-        return chunk
-
 
     sentences = _split_sentences(
         text
     )
 
-    if not sentences:
-        return chunk
 
-
-    ranked_sentences = sorted(
-        (
-            (
-                _sentence_score(
-                    query,
-                    sentence,
-                ),
-                sentence,
-            )
-            for sentence in sentences
-        ),
-        key=lambda item: item[0],
-        reverse=True,
+    ranked = await _rank_sentences(
+        query,
+        sentences,
     )
 
 
-    selected = [
-        sentence
-        for score, sentence in ranked_sentences[
-            :MAX_SENTENCES_PER_CHUNK
-        ]
-        if score > 0
-    ]
-
-
-    if not selected:
-        selected = sentences[
-            :MAX_SENTENCES_PER_CHUNK
-        ]
-
-
-    selected = _remove_duplicates(
-        selected
+    selected = _remove_redundant(
+        ranked
     )
 
 
-    compressed_text = "\n".join(
+    compressed_text = " ".join(
         selected
     )
 
 
     compressed_text = compressed_text[
-        :MAX_COMPRESSED_LENGTH
+        :MAX_COMPRESSED_CHARS
     ]
 
 
-    result = {
+    ratio = (
+
+        len(compressed_text)
+
+        /
+
+        max(
+            len(text),
+            1,
+        )
+
+    )
+
+
+    return CompressedChunk(
+
         **chunk,
-        "text": text,
-        "compressed_text": compressed_text,
-        "compression_ratio": round(
-            len(compressed_text)
-            /
-            max(len(text), 1),
-            3,
-        ),
-    }
 
+        compressed_text=compressed_text,
 
-    return result
+        compression_ratio=ratio,
+
+    )
 
 
 
@@ -251,31 +388,54 @@ def compress_chunk(
 # ==========================================================
 
 
-def compress_chunks(
+async def compress_chunks(
     query: str,
     chunks: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
+) -> list[CompressedChunk]:
     """
-    Compress ranked chunks.
+    Compress reranked chunks.
+
+    Input:
+
+        RankedChunk list
+
+
+    Output:
+
+        CompressedChunk list
+
+
+    Next stage:
+
+        context_optimizer.py
     """
 
     if not chunks:
+
         return []
 
 
     logger.info(
-        "Compressing chunks=%d",
+        "Compression started chunks=%d",
         len(chunks),
     )
 
 
-    result = [
-        compress_chunk(
-            query=query,
-            chunk=chunk,
+    result: list[CompressedChunk] = []
+
+
+    for chunk in chunks:
+
+        compressed = await _compress_chunk(
+            query,
+            chunk,
         )
-        for chunk in chunks
-    ]
+
+
+        result.append(
+            compressed
+        )
+
 
 
     logger.info(
@@ -285,36 +445,3 @@ def compress_chunks(
 
 
     return result
-
-
-
-def to_compressed_models(
-    chunks: list[dict[str, Any]],
-) -> list[CompressedChunk]:
-    """
-    Convert dictionaries into domain models.
-    """
-
-    return [
-        CompressedChunk(
-            **chunk,
-        )
-        for chunk in chunks
-    ]
-
-
-
-def estimate_tokens(
-    text: str,
-) -> int:
-    """
-    Approximate token count.
-    """
-
-    if not text:
-        return 0
-
-    return max(
-        1,
-        len(text) // 4,
-    )
