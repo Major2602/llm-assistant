@@ -50,6 +50,7 @@ from web_search.models import (
     DocumentChunk,
     HybridRetrievalResult,
     NormalizedQuery,
+    DenseVector
 )
 
 
@@ -285,7 +286,7 @@ async def _ensure_payload_indexes():
 
 async def _dense_embeddings(
     texts: list[str],
-):
+): -> list[DenseVector]
 
     model = get_embedding_model()
 
@@ -365,7 +366,7 @@ async def store_chunks(
     await ensure_collection(
 
         vector_size=len(
-            dense_vectors[0]
+            dense_vectors[0].values
         )
 
     )
@@ -411,7 +412,7 @@ async def store_chunks(
                 vector={
 
                     DENSE_NAME:
-                        vector,
+                        vector.values,
 
 
                     SPARSE_NAME:
@@ -470,7 +471,7 @@ async def hybrid_search(
 
         query.normalized
 
-    )
+    ).values
 
 
     sparse_query = _sparse_embedding(
