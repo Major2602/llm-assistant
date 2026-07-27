@@ -1,35 +1,12 @@
 """
 Chunk quality filtering layer.
 
-Pipeline position:
-
-DocumentChunk
-        |
-        v
-Filter chunks
-        |
-        v
-TOP 10 FilteredChunk
-        |
-        v
-Embedding similarity
-
-
-Responsibilities:
+Module Responsibilities:
 
 - remove invalid chunks;
 - remove duplicates;
 - calculate lightweight quality score;
 - reduce candidate pool.
-
-
-This module does NOT:
-
-- generate embeddings;
-- access Qdrant;
-- rerank;
-- compress;
-- call LLM.
 """
 
 from __future__ import annotations
@@ -140,7 +117,7 @@ def _keyword_score(
 
     content = (
 
-        chunk.title
+        (chunk.source.title or "")
 
         + " "
 
@@ -269,17 +246,17 @@ def _metadata_score(
     score = 0.0
 
 
-    if chunk.title:
+    if chunk.source.title:
 
         score += 0.4
 
 
-    if chunk.url:
+    if chunk.source.url:
 
         score += 0.4
 
 
-    if chunk.id:
+    if chunk.source.id:
 
         score += 0.2
 
@@ -289,8 +266,10 @@ def _metadata_score(
 
 
 def _calculate_score(
-    query: str,
-    chunk: DocumentChunk,
+    keyword_score: float,
+    quality_score: float,
+    length_score: float,
+    metadata_score: float,
 ) -> float:
     """
     Combined lightweight filtering score.
@@ -298,39 +277,13 @@ def _calculate_score(
 
     return (
 
-        _keyword_score(
-            query,
-            chunk,
-        )
-
-        * 0.45
-
-
+        keyword_score * 0.45
         +
-
-        _quality_score(
-            chunk,
-        )
-
-        * 0.30
-
-
+        quality_score * 0.30
         +
-
-        _length_score(
-            chunk,
-        )
-
-        * 0.15
-
-
+        length_score * 0.15
         +
-
-        _metadata_score(
-            chunk,
-        )
-
-        * 0.10
+        metadata_score * 0.10
 
     )
 
@@ -448,10 +401,28 @@ def filter_chunks(
 
     for chunk in unique_chunks:
 
+        keyword_score=_keyword_score(
+                query,
+                chunk
+        )
+
+        quality_score=_quality_score(
+                chunk
+        )
+
+        length_score=_length_score(
+                chunk
+        )
+
+        metadata_score=_metadata_score(
+                chunk
+        )
 
         score = _calculate_score(
-            query,
-            chunk,
+                keyword_score,
+                quality_score,
+                length_score,
+                metadata_score,
         )
 
 
@@ -464,6 +435,12 @@ def filter_chunks(
         filtered = FilteredChunk(
 
             **chunk.model_dump(),
+
+            keyword_score=keyword_score,
+
+            quality_score=quality_score,
+
+            length_score=length_score,
 
             filter_score=score,
 
