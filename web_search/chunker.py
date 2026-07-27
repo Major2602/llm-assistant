@@ -1,35 +1,13 @@
 """
 Document chunking layer.
 
-Pipeline position:
-
-EXA SEARCH
-    |
-    v
-Document normalize
-    |
-    v
-chunker.py
-    |
-    v
-filter.py
-
-
-Responsibilities:
+Module Responsibilities:
 
 - split documents into chunks;
 - preserve metadata;
 - create DocumentChunk models;
 - generate chunk identifiers.
 
-
-This module does NOT:
-
-- filter chunks;
-- rank chunks;
-- generate embeddings;
-- access Qdrant;
-- call LLM;
 """
 
 from __future__ import annotations
@@ -85,7 +63,7 @@ def _timestamp() -> int:
 
 
 def _create_chunk_id(
-    url: str,
+    document_id: str,
     index: int,
     text: str,
 ) -> str:
@@ -94,7 +72,7 @@ def _create_chunk_id(
     """
 
     raw = (
-        f"{url}:{index}:{text[:100]}"
+        f"{document_id}:{index}:{text[:100]}"
     )
 
 
@@ -204,47 +182,30 @@ def chunk_documents(
                 DocumentChunk(
 
                     id=_create_chunk_id(
-
-                        document.url,
-
+                        
+                        document.id,
+                        
                         index,
-
+                        
                         text,
-
+                        
                     ),
 
 
-                    query=document.query,
-
-
-                    title=document.title,
-
-
-                    url=document.url,
-
+                    document_id=document.id,
 
                     text=text,
 
-
-                    provider=document.provider,
-
+                    source=document.source,
 
                     chunk_index=index,
 
-
-                    author=document.author,
-
-
-                    published_date=document.published_date,
-
-
                     created_at=timestamp,
 
-
-                    last_access=timestamp,
-
+                    last_acces=timestamp
+                    
                 )
-
+                
             )
 
 
