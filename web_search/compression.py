@@ -183,8 +183,8 @@ async def _rank_sentences(
     ):
 
         score = _cosine_similarity(
-            query_vector,
-            vector,
+            query_vector.values,
+            vector.values,
         )
 
 
