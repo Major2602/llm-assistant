@@ -202,7 +202,7 @@ def chunk_documents(
 
                     created_at=timestamp,
 
-                    last_acces=timestamp
+                    last_access=timestamp
                     
                 )
                 
