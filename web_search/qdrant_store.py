@@ -1,44 +1,12 @@
 """
 Qdrant hybrid memory layer.
 
-Architecture:
-
-USER QUERY
-    |
-    v
-
-Query Normalization
-
-    |
-    v
-
-QDRANT HYBRID RETRIEVAL
-
-    Dense Vector Search
-             +
-    BM25 Sparse Search
-             |
-             v
-        RRF Fusion
-
-
-Responsibilities:
+Module Responsibilities:
 
 - store chunks;
 - store embeddings;
 - hybrid retrieval;
 - memory lifecycle.
-
-
-Does NOT:
-
-- call Exa;
-- normalize documents;
-- chunk;
-- filter;
-- rerank;
-- compress;
-- build context.
 """
 
 
@@ -587,7 +555,9 @@ async def hybrid_search(
 
                 chunk=chunk,
 
-                fusion_score=point.score,
+                rrf_score=point.score,
+
+                retrieved_from = "qdrant"
 
             )
 
