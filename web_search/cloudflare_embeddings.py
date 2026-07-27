@@ -1,20 +1,6 @@
 """
 Cloudflare Workers AI Embedding Service.
 
-Pipeline position:
-
-
-Text
- |
- v
-cloudflare_embeddings.py
- |
- +--------------------------+
- |                          |
- v                          v
-
-embedding_retrieval.py      qdrant_store.py
-
 
 Used by:
 
@@ -23,25 +9,13 @@ Used by:
 - extractive compression.
 
 
-Responsibilities:
+Module Responsibilities:
 
 - generate query embeddings;
 - generate document embeddings;
 - batch requests;
 - normalize Cloudflare responses;
 - validate embedding dimensions.
-
-
-This module does NOT know about:
-
-- documents;
-- chunks;
-- filtering;
-- ranking;
-- reranking;
-- compression;
-- Qdrant;
-- agents.
 """
 
 
@@ -221,15 +195,21 @@ def _clean_texts(
     Remove empty values.
     """
 
-    return [
+    cleaned=[]
 
-        text.strip()
+    for text in texts:
 
-        for text in texts
+         if text is None:
 
-        if text and text.strip()
+              cleaned.append("")
 
-    ]
+         else:
+
+              cleaned.append(
+                   text.strip()
+              )
+ 
+    return cleaned
 
 
 
@@ -462,6 +442,20 @@ class CloudflareEmbeddings:
 
         client = get_http_client()
 
+        if not texts:
+
+            return []
+
+        if any(
+         
+            not text
+            for text in texts
+        ):
+
+            raise CloudFlareEmbeddingError(
+                "Empty text passed to embedding API"
+            )
+
 
         response = await client.post(
 
@@ -521,7 +515,7 @@ class CloudflareEmbeddings:
         )
 
 
-        if not clean_texts:
+        if not any(clean_texts):
 
             return []
 
