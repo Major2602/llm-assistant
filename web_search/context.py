@@ -1,22 +1,26 @@
 """
 Web search orchestration layer.
 
-Final Architecture:
+Architecture:
 
 USER QUERY
     |
     v
-Query preprocessing
+Query Normalizing
     |
     v
 Qdrant Hybrid Retrieval
+
     |
     +----------------+
     |                |
     v                v
-CACHE HIT        CACHE MISS
+
+CACHE HIT       CACHE MISS
+
     |                |
     |                v
+
     |            Exa Search
     |                |
     |            Normalize
@@ -25,24 +29,36 @@ CACHE HIT        CACHE MISS
     |                |
     |            Filter
     |                |
-    |            Embedding Retrieval
+    |            Embedding Similarity
     |                |
     +-------+--------+
+
             |
             v
-    Cloudflare Reranker
+
+      Cloudflare Reranker
+
             |
             v
-    Extractive Compression
+
+ Extractive Compression
+
             |
             v
-    Context Optimization
+
+ Context Optimization
+
             |
-       +----+----+
-       |         |
-       v         v
-  Qdrant Memory Agent Context
+      +-----+-----+
+
+      |           |
+
+      v           v
+
+ Qdrant       AgentContext
+ Memory
 """
+
 
 from __future__ import annotations
 
@@ -55,30 +71,37 @@ from web_search.chunker import (
     chunk_documents,
 )
 
+
 from web_search.compression import (
     compress_chunks,
 )
+
 
 from web_search.context_optimizer import (
     optimize_context,
 )
 
+
 from web_search.embedding_retrieval import (
     retrieve_by_embedding_similarity,
 )
+
 
 from web_search.exa import (
     search_exa,
 )
 
+
 from web_search.filter import (
     filter_chunks,
 )
+
 
 from web_search.models import (
     AgentContext,
     RankedChunk,
 )
+
 
 from web_search.qdrant_store import (
     add_chunks,
@@ -86,16 +109,20 @@ from web_search.qdrant_store import (
     hybrid_search,
 )
 
-from web_search.query_preprocessor import (
-    preprocess_query,
+
+from web_search.query_normalizer import (
+    normalize_query,
 )
+
 
 from web_search.reranker import (
     get_reranker,
 )
 
 
+
 logger = logging.getLogger(__name__)
+
 
 
 # ==========================================================
@@ -113,6 +140,7 @@ CLEANUP_DAYS = 30
 
 
 
+
 # ==========================================================
 # Initialization
 # ==========================================================
@@ -126,11 +154,12 @@ _lock = asyncio.Lock()
 
 async def init_web_search() -> None:
     """
-    Initialize web search subsystem.
+    Initialize search subsystem.
 
-    Performs:
-    - cleanup expired memory;
-    - one-time initialization.
+    Tasks:
+
+    - cleanup old memory;
+    - initialize once.
     """
 
 
@@ -153,7 +182,7 @@ async def init_web_search() -> None:
 
 
         logger.info(
-            "Initializing web search subsystem."
+            "Initializing web search."
         )
 
 
@@ -165,76 +194,88 @@ async def init_web_search() -> None:
         _initialized = True
 
 
+
         logger.info(
             "Web search initialized."
         )
 
 
 
+
 # ==========================================================
-# Cache miss pipeline
+# Exa pipeline
 # ==========================================================
 
 
-async def _build_from_exa(
+async def _retrieve_from_web(
     query: str,
 ) -> list[RankedChunk]:
     """
-    Full retrieval pipeline after cache miss.
+    Cache miss retrieval pipeline.
 
-    Pipeline:
-
-        Exa
-
-          |
-
-        Chunker
-
-          |
-
-        Filter
-
-          |
-
-        Embedding similarity
-
-          |
-
-        Reranker
-
+    Exa
+     |
+    Chunker
+     |
+    Filter
+     |
+    Embedding similarity
+     |
+    Reranker
     """
 
 
-    logger.info(
-        "Running Exa retrieval pipeline."
-    )
-
-
-
     documents = await search_exa(
-        query,
+        query
     )
+
+
+    if not documents:
+
+        return []
 
 
 
     chunks = chunk_documents(
-        documents,
+        documents
     )
+
+
+    if not chunks:
+
+        return []
 
 
 
     filtered = filter_chunks(
+
         chunks=chunks,
+
         query=query,
+
     )
+
+
+    if not filtered:
+
+        return []
 
 
 
     semantic = await retrieve_by_embedding_similarity(
+
         query=query,
+
         chunks=filtered,
+
         top_k=EMBEDDING_TOP_K,
+
     )
+
+
+    if not semantic:
+
+        return []
 
 
 
@@ -243,52 +284,55 @@ async def _build_from_exa(
 
 
     ranked = await reranker.rerank(
-        query=query,
-        chunks=semantic,
-        top_k=RERANK_TOP_K,
-    )
 
+        query=query,
+
+        chunks=semantic,
+
+        top_k=RERANK_TOP_K,
+
+    )
 
 
     return ranked
 
 
 
+
 # ==========================================================
-# Cache hit pipeline
+# Qdrant cache pipeline
 # ==========================================================
 
 
-async def _build_from_cache(
+async def _retrieve_from_memory(
     query: str,
 ) -> list[RankedChunk] | None:
     """
-    Retrieve from Qdrant hybrid memory.
+    Qdrant hybrid retrieval.
 
-    Pipeline:
-
-        Dense search
-
+    Dense vector
         +
-
-        BM25 search
-
-        +
-
-        RRF fusion
+    BM25 sparse
 
         |
+        v
 
-        Reranker
+       RRF
 
+        |
+        v
+
+    Reranker
     """
 
 
     cached = await hybrid_search(
-        query=query,
-        limit=CACHE_TOP_K,
-    )
 
+        query=query,
+
+        limit=CACHE_TOP_K,
+
+    )
 
 
     if not cached:
@@ -298,8 +342,11 @@ async def _build_from_cache(
 
 
     logger.info(
-        "Hybrid retrieval cache hit. chunks=%d",
+
+        "Qdrant cache hit chunks=%d",
+
         len(cached),
+
     )
 
 
@@ -309,14 +356,60 @@ async def _build_from_cache(
 
 
     ranked = await reranker.rerank(
+
         query=query,
+
         chunks=cached,
+
         top_k=RERANK_TOP_K,
+
     )
 
 
-
     return ranked
+
+
+
+
+# ==========================================================
+# Storage
+# ==========================================================
+
+
+async def _store_memory(
+    chunks: list[RankedChunk],
+) -> None:
+    """
+    Store retrieval memory in Qdrant.
+
+    Stores:
+
+    - chunks
+    - metadata
+    - scores
+    - timestamps
+    """
+
+
+    if not chunks:
+
+        return
+
+
+
+    payload = [
+
+        chunk.model_dump()
+
+        for chunk in chunks
+
+    ]
+
+
+    await add_chunks(
+        payload
+    )
+
 
 
 
@@ -329,28 +422,7 @@ async def get_context(
     query: str,
 ) -> AgentContext:
     """
-    Build final optimized agent context.
-
-    Pipeline:
-
-        Query preprocessing
-
-            |
-
-        Hybrid retrieval
-
-            |
-
-        Reranking
-
-            |
-
-        Compression
-
-            |
-
-        Context optimization
-
+    Main web search pipeline entrypoint.
     """
 
 
@@ -358,33 +430,30 @@ async def get_context(
 
 
 
-    search_query = preprocess_query(
-        query,
+    normalized_query = normalize_query(
+        query
     )
-
-
-    normalized_query = search_query.normalized
 
 
 
     if not normalized_query:
 
         raise ValueError(
-            "Query cannot be empty."
+            "Empty query."
         )
 
 
 
     logger.info(
-        "Building context. intent=%s language=%s",
-        search_query.intent,
-        search_query.language,
+        "Building context."
     )
 
 
 
-    ranked = await _build_from_cache(
-        normalized_query,
+    ranked = await _retrieve_from_memory(
+
+        normalized_query
+
     )
 
 
@@ -393,48 +462,62 @@ async def get_context(
 
 
         logger.info(
-            "Cache miss. Running Exa pipeline."
+            "Cache miss. Running Exa."
         )
 
 
-        ranked = await _build_from_exa(
-            normalized_query,
+        ranked = await _retrieve_from_web(
+
+            normalized_query
+
         )
 
 
-        await add_chunks(
-            [
-                chunk.model_dump()
-                if hasattr(
-                    chunk,
-                    "model_dump",
-                )
-                else chunk
-
-                for chunk in ranked
-            ],
+        await _store_memory(
+            ranked
         )
+
+
+
+    if not ranked:
+
+        return AgentContext()
 
 
 
     compressed = await compress_chunks(
+
         query=normalized_query,
+
         chunks=ranked,
+
     )
 
 
 
+    if not compressed:
+
+        return AgentContext()
+
+
+
     context = optimize_context(
-        compressed,
+
+        query=normalized_query,
+
+        chunks=compressed,
+
     )
 
 
 
     logger.info(
-        "Context generated. sources=%d",
-        len(context.sources),
-    )
 
+        "Context ready sources=%d",
+
+        len(context.sources),
+
+    )
 
 
     return context
