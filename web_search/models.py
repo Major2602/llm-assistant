@@ -62,6 +62,7 @@ from __future__ import annotations
 
 
 from typing import Any
+from datetime import datetime
 
 
 from pydantic import BaseModel, Field
@@ -76,21 +77,13 @@ from pydantic import BaseModel, Field
 class NormalizedQuery(BaseModel):
     """
     User query after normalization.
-
-    Produced by:
-
-        query_normalizer.py
-
-    Used by:
-
-        retrieval pipeline
     """
 
     original: str
 
     normalized: str
 
-    language: str = "en"
+    created_at: int | None = None
 
 
 
@@ -102,12 +95,6 @@ class NormalizedQuery(BaseModel):
 class Source(BaseModel):
     """
     Citation source metadata.
-
-    Used by:
-
-    - compression
-    - context
-    - final answer
     """
 
     title: str = "Untitled"
@@ -120,6 +107,8 @@ class Source(BaseModel):
 
     published_date: str | None = None
 
+    domain: str | None = None
+
 
 
 # ==========================================================
@@ -130,15 +119,9 @@ class Source(BaseModel):
 class WebDocument(BaseModel):
     """
     Normalized external document.
-
-    Produced by:
-
-        exa.py
     """
 
-    title: str = "Untitled"
-
-    url: str = ""
+    id: str
 
     text: str
 
@@ -147,6 +130,8 @@ class WebDocument(BaseModel):
     )
 
     created_at: int | None = None
+
+    last_access: int | None = None
 
 
 
@@ -158,13 +143,11 @@ class WebDocument(BaseModel):
 class DocumentChunk(BaseModel):
     """
     Base retrieval chunk.
-
-    Produced by:
-
-        chunker.py
     """
 
     id: str
+
+    document_id: str
 
     text: str
 
@@ -183,11 +166,6 @@ class DocumentChunk(BaseModel):
 class FilteredChunk(DocumentChunk):
     """
     Chunk after heuristic filtering.
-
-    Added:
-
-    - keyword score
-    - quality score
     """
 
     keyword_score: float = 0.0
@@ -261,13 +239,7 @@ class SparseVector(BaseModel):
 
 class HybridRetrievalResult(BaseModel):
     """
-    Qdrant hybrid search result.
-
-    Contains:
-
-    - dense score
-    - sparse score
-    - fusion score
+    Qdrant hybrid retrieval result.
     """
 
     chunk: DocumentChunk
@@ -277,6 +249,21 @@ class HybridRetrievalResult(BaseModel):
     sparse_score: float = 0.0
 
     fusion_score: float = 0.0
+
+    retrieved_from: str = "qdrant"
+
+
+
+class RetrievalDecision(BaseModel):
+    """
+    Result of memory lookup decision
+    """
+
+    cache_hit: bool = False
+
+    reuslts: list[HybridRetrievalResult] = Field(
+        default_factory=list
+    )
 
 
 
@@ -290,6 +277,8 @@ class ContextDocument(BaseModel):
     Final document supplied to LLM.
     """
 
+    chunk_id: str
+    
     text: str
 
     source: Source
@@ -333,32 +322,37 @@ class AgentContext(BaseModel):
 
 
 # ==========================================================
-# Pipeline helpers
+# Final Answer
 # ==========================================================
 
 
-class PipelineScore(BaseModel):
+class FinalAnswer(BaseModel):
     """
-    Unified score container.
-    """
-
-    keyword: float = 0.0
-
-    quality: float = 0.0
-
-    similarity: float = 0.0
-
-    rerank: float = 0.0
-
-    fusion: float = 0.0
-
-
-
-def model_to_dict(
-    model: BaseModel,
-) -> dict[str, Any]:
-    """
-    Unified serialization helper.
+    Final agent response.
     """
 
-    return model.model_dump()
+    answer: str
+
+    sources: list[Source] = Field(
+        default_factory=list
+    )
+
+    citation_map: dict[str, Source] = Field(
+        default_factory=dict
+    )
+
+
+
+# ==========================================================
+# Pipeline Metadata
+# ==========================================================
+
+
+class PipelineMetadata(BaseModel):
+    """
+    Runtime pipeline metadata.
+    """
+
+    request_id: str | None = None
+
+    created_at: str | None = None
