@@ -1,37 +1,11 @@
 """
 Cloudflare Workers AI reranker layer.
 
-Pipeline position:
-
-Embedding Similarity
-        |
-        v
-EmbeddingChunk
-        |
-        v
-Cloudflare Reranker
-        |
-        v
-RankedChunk
-        |
-        v
-Extractive Compression
-
-
-Responsibilities:
+Module Responsibilities:
 
 - semantic reranking;
 - deep relevance scoring;
 - reducing candidate chunks.
-
-
-This module does NOT:
-
-- retrieve documents;
-- generate embeddings;
-- store data;
-- compress context;
-- build LLM context.
 """
 
 
@@ -57,7 +31,7 @@ from tenacity import (
 
 
 from web_search.models import (
-    EmbeddingChunk,
+    EmbeddedChunk,
     RankedChunk,
 )
 
@@ -373,23 +347,13 @@ class CloudflareReranker:
 
         query: str,
 
-        chunks: list[EmbeddingChunk],
+        chunks: list[EmbeddedChunk],
 
         top_k: int = DEFAULT_TOP_K,
 
     ) -> list[RankedChunk]:
         """
         Rerank embedding candidates.
-
-        Input:
-
-            TOP embedding chunks
-
-
-        Output:
-
-            TOP RankedChunk
-
         """
 
 
