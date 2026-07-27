@@ -22,10 +22,10 @@ from typing import Any
 
 from web_search.models import (
     AgentContext,
-    ContextDocument
+    ContextDocument,
     CompressedChunk,
     OptimizedContext,
-    Source,
+    Source
 )
 
 
