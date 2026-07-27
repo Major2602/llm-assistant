@@ -6,34 +6,26 @@ Architecture:
 USER QUERY
     |
     v
+
+Query Normalization
+
+    |
+    v
+
 QDRANT HYBRID RETRIEVAL
 
     Dense Vector Search
-            +
+             +
     BM25 Sparse Search
-            |
-            v
+             |
+             v
         RRF Fusion
-
-    |
-    v
-
-Embedding Retrieval
-    |
-    v
-
-Reranker
-    |
-    v
-
-Context
 
 
 Responsibilities:
 
 - store chunks;
-- store dense embeddings;
-- store BM25 sparse vectors;
+- store embeddings;
 - hybrid retrieval;
 - memory lifecycle.
 
@@ -41,7 +33,8 @@ Responsibilities:
 Does NOT:
 
 - call Exa;
-- chunk documents;
+- normalize documents;
+- chunk;
 - filter;
 - rerank;
 - compress;
@@ -58,36 +51,22 @@ import os
 
 from datetime import datetime, timezone, timedelta
 
-from typing import Any
-
 
 from qdrant_client import AsyncQdrantClient
 
 
 from qdrant_client.models import (
-
     Distance,
-
     VectorParams,
-
     SparseVectorParams,
-
     SparseVector,
-
     PointStruct,
-
     SparseIndexParams,
-
     Modifier,
-
     Filter,
-
     FieldCondition,
-
     Range,
-
     PayloadSchemaType,
-
 )
 
 
@@ -101,14 +80,13 @@ from web_search.cloudflare_embeddings import (
 
 from web_search.models import (
     DocumentChunk,
-    HybridSearchResult,
+    HybridRetrievalResult,
+    NormalizedQuery,
 )
 
 
 
 logger = logging.getLogger(__name__)
-
-
 
 
 
@@ -120,14 +98,6 @@ logger = logging.getLogger(__name__)
 QDRANT_URL = os.getenv(
     "QDRANT_URL"
 )
-
-
-if not QDRANT_URL:
-
-    raise RuntimeError(
-        "QDRANT_URL missing."
-    )
-
 
 
 QDRANT_API_KEY = os.getenv(
@@ -143,13 +113,13 @@ COLLECTION_NAME = os.getenv(
 
 
 
-DENSE_VECTOR_NAME = "dense"
+DENSE_NAME = "dense"
 
-SPARSE_VECTOR_NAME = "bm25"
+SPARSE_NAME = "bm25"
 
 
 
-HYBRID_TOP_K = int(
+TOP_K = int(
     os.getenv(
         "QDRANT_TOP_K",
         "10",
@@ -157,6 +127,12 @@ HYBRID_TOP_K = int(
 )
 
 
+
+if not QDRANT_URL:
+
+    raise RuntimeError(
+        "QDRANT_URL missing"
+    )
 
 
 
@@ -172,9 +148,7 @@ _sparse_encoder: SparseTextEmbedding | None = None
 
 
 
-
-
-def get_qdrant_client() -> AsyncQdrantClient:
+def get_client() -> AsyncQdrantClient:
     """
     Singleton Qdrant client.
     """
@@ -183,11 +157,6 @@ def get_qdrant_client() -> AsyncQdrantClient:
 
 
     if _client is None:
-
-        logger.info(
-            "Initializing Qdrant client."
-        )
-
 
         _client = AsyncQdrantClient(
 
@@ -202,22 +171,19 @@ def get_qdrant_client() -> AsyncQdrantClient:
 
 
 
-
-
 def get_sparse_encoder() -> SparseTextEmbedding:
     """
-    Singleton BM25 encoder.
+    BM25 encoder.
+
+    Used only for sparse vector generation.
+
+    Storage and scoring remain Qdrant responsibility.
     """
 
     global _sparse_encoder
 
 
     if _sparse_encoder is None:
-
-        logger.info(
-            "Initializing BM25 encoder."
-        )
-
 
         _sparse_encoder = SparseTextEmbedding(
 
@@ -230,46 +196,27 @@ def get_sparse_encoder() -> SparseTextEmbedding:
 
 
 
-
-
 # ==========================================================
-# Collection management
+# Collection
 # ==========================================================
-
-
-async def collection_exists() -> bool:
-
-    return await get_qdrant_client().collection_exists(
-
-        COLLECTION_NAME
-
-    )
-
-
-
 
 
 async def ensure_collection(
     vector_size: int,
 ) -> None:
     """
-    Create hybrid Qdrant collection.
+    Create Qdrant hybrid collection.
     """
 
-
-    client = get_qdrant_client()
-
+    client = get_client()
 
 
-    if not await client.collection_exists(
+    exists = await client.collection_exists(
         COLLECTION_NAME
-    ):
+    )
 
 
-        logger.info(
-            "Creating Qdrant hybrid collection."
-        )
-
+    if not exists:
 
         await client.create_collection(
 
@@ -278,7 +225,7 @@ async def ensure_collection(
 
             vectors_config={
 
-                DENSE_VECTOR_NAME:
+                DENSE_NAME:
 
                     VectorParams(
 
@@ -293,7 +240,7 @@ async def ensure_collection(
 
             sparse_vectors_config={
 
-                SPARSE_VECTOR_NAME:
+                SPARSE_NAME:
 
                     SparseVectorParams(
 
@@ -308,22 +255,21 @@ async def ensure_collection(
         )
 
 
-    await ensure_payload_indexes()
+
+    await _ensure_payload_indexes()
 
 
 
-
-
-async def ensure_payload_indexes():
+async def _ensure_payload_indexes():
 
     indexes = {
 
-        "url":
+        "source.url":
             PayloadSchemaType.KEYWORD,
 
 
-        "provider":
-            PayloadSchemaType.KEYWORD,
+        "created_at":
+            PayloadSchemaType.INTEGER,
 
 
         "last_access":
@@ -333,34 +279,26 @@ async def ensure_payload_indexes():
 
 
 
-    collection = await get_qdrant_client().get_collection(
-
+    collection = await get_client().get_collection(
         COLLECTION_NAME
-
     )
 
 
-
     existing = (
-
         collection.payload_schema
-
         or {}
-
     )
 
 
 
     for field, schema in indexes.items():
 
-
         if field in existing:
 
             continue
 
 
-
-        await get_qdrant_client().create_payload_index(
+        await get_client().create_payload_index(
 
             collection_name=COLLECTION_NAME,
 
@@ -372,14 +310,12 @@ async def ensure_payload_indexes():
 
 
 
-
-
 # ==========================================================
-# Embeddings
+# Vector generation
 # ==========================================================
 
 
-async def _create_dense_embeddings(
+async def _dense_embeddings(
     texts: list[str],
 ):
 
@@ -392,22 +328,17 @@ async def _create_dense_embeddings(
 
 
 
-
-
-def _create_sparse_embedding(
+def _sparse_embedding(
     text: str,
 ) -> SparseVector:
-
 
     encoder = get_sparse_encoder()
 
 
     vector = next(
-
         encoder.embed(
             [text]
         )
-
     )
 
 
@@ -421,23 +352,23 @@ def _create_sparse_embedding(
 
 
 
-
-
 # ==========================================================
 # Storage
 # ==========================================================
 
 
-async def add_chunks(
-    chunks: list[dict[str, Any]],
+async def store_chunks(
+    chunks: list[DocumentChunk],
 ) -> None:
     """
-    Store final ranked chunks.
+    Store chunks in Qdrant memory.
 
-    Input:
+    Stores:
 
-        reranker/compression output
-
+    - original text;
+    - metadata;
+    - timestamps;
+    - vectors.
     """
 
 
@@ -449,10 +380,7 @@ async def add_chunks(
 
     texts = [
 
-        chunk.get(
-            "text",
-            "",
-        )
+        chunk.text
 
         for chunk in chunks
 
@@ -460,7 +388,7 @@ async def add_chunks(
 
 
 
-    dense_vectors = await _create_dense_embeddings(
+    dense_vectors = await _dense_embeddings(
         texts
     )
 
@@ -468,7 +396,7 @@ async def add_chunks(
 
     await ensure_collection(
 
-        len(
+        vector_size=len(
             dense_vectors[0]
         )
 
@@ -477,20 +405,18 @@ async def add_chunks(
 
 
     timestamp = int(
-
         datetime.now(
             timezone.utc
         ).timestamp()
-
     )
 
 
 
-    points: list[PointStruct] = []
+    points = []
 
 
 
-    for chunk, dense in zip(
+    for chunk, vector in zip(
 
         chunks,
 
@@ -499,25 +425,11 @@ async def add_chunks(
     ):
 
 
-        document = DocumentChunk(
-
-            **chunk
-
-        )
+        payload = chunk.model_dump()
 
 
 
-        payload = document.model_dump()
-
-
-
-        payload.update({
-
-            "last_access":
-
-                timestamp,
-
-        })
+        payload["last_access"] = timestamp
 
 
 
@@ -525,22 +437,18 @@ async def add_chunks(
 
             PointStruct(
 
-                id=document.id,
+                id=chunk.id,
 
 
                 vector={
 
-                    DENSE_VECTOR_NAME:
+                    DENSE_NAME:
+                        vector,
 
-                        dense,
 
-
-                    SPARSE_VECTOR_NAME:
-
-                        _create_sparse_embedding(
-
-                            document.text
-
+                    SPARSE_NAME:
+                        _sparse_embedding(
+                            chunk.text
                         )
 
                 },
@@ -554,7 +462,7 @@ async def add_chunks(
 
 
 
-    await get_qdrant_client().upsert(
+    await get_client().upsert(
 
         collection_name=COLLECTION_NAME,
 
@@ -564,29 +472,17 @@ async def add_chunks(
 
 
 
-    logger.info(
-
-        "Stored %d chunks in Qdrant.",
-
-        len(points),
-
-    )
-
-
-
-
-
 # ==========================================================
-# Hybrid Retrieval
+# Hybrid retrieval
 # ==========================================================
 
 
 async def hybrid_search(
-    query: str,
-    limit: int = HYBRID_TOP_K,
-) -> list[dict[str, Any]]:
+    query: NormalizedQuery,
+    limit: int = TOP_K,
+) -> list[HybridRetrievalResult]:
     """
-    Dense + BM25 hybrid search.
+    Dense + BM25 hybrid retrieval.
 
     Fusion:
 
@@ -594,7 +490,9 @@ async def hybrid_search(
     """
 
 
-    if not await collection_exists():
+    if not await get_client().collection_exists(
+        COLLECTION_NAME
+    ):
 
         return []
 
@@ -602,19 +500,20 @@ async def hybrid_search(
 
     dense_query = await get_embedding_model().embed_query(
 
-        query
+        query.normalized
+
+    )
+
+
+    sparse_query = _sparse_embedding(
+
+        query.normalized
 
     )
 
 
 
-    sparse_query = _create_sparse_embedding(
-        query
-    )
-
-
-
-    result = await get_qdrant_client().query_points(
+    result = await get_client().query_points(
 
         collection_name=COLLECTION_NAME,
 
@@ -624,17 +523,12 @@ async def hybrid_search(
             {
 
                 "query":
-
                     dense_query,
 
-
                 "using":
-
-                    DENSE_VECTOR_NAME,
-
+                    DENSE_NAME,
 
                 "limit":
-
                     limit,
 
             },
@@ -643,17 +537,12 @@ async def hybrid_search(
             {
 
                 "query":
-
                     sparse_query,
 
-
                 "using":
-
-                    SPARSE_VECTOR_NAME,
-
+                    SPARSE_NAME,
 
                 "limit":
-
                     limit,
 
             },
@@ -664,7 +553,6 @@ async def hybrid_search(
         query={
 
             "fusion":
-
                 "rrf"
 
         },
@@ -679,28 +567,6 @@ async def hybrid_search(
 
 
 
-    if not result.points:
-
-        return []
-
-
-
-    ids = [
-
-        point.id
-
-        for point in result.points
-
-    ]
-
-
-
-    await update_last_access(
-        ids
-    )
-
-
-
     output = []
 
 
@@ -708,33 +574,41 @@ async def hybrid_search(
     for point in result.points:
 
 
-        item = {
+        chunk = DocumentChunk(
 
-            **point.payload,
-
-            "fusion_score":
-
-                point.score,
-
-        }
-
-
-
-        output.append(
-
-            HybridSearchResult(
-
-                **item
-
-            ).model_dump()
+            **point.payload
 
         )
 
 
+        output.append(
+
+            HybridRetrievalResult(
+
+                chunk=chunk,
+
+                fusion_score=point.score,
+
+            )
+
+        )
+
+
+    await update_access(
+
+        [
+
+            item.chunk.id
+
+            for item in output
+
+        ]
+
+    )
+
+
 
     return output
-
-
 
 
 
@@ -743,14 +617,13 @@ async def hybrid_search(
 # ==========================================================
 
 
-async def update_last_access(
+async def update_access(
     ids: list[str],
 ):
 
     if not ids:
 
         return
-
 
 
     timestamp = int(
@@ -762,20 +635,16 @@ async def update_last_access(
     )
 
 
-
-    await get_qdrant_client().set_payload(
+    await get_client().set_payload(
 
         collection_name=COLLECTION_NAME,
-
 
         payload={
 
             "last_access":
-
                 timestamp
 
         },
-
 
         points=ids,
 
@@ -783,22 +652,13 @@ async def update_last_access(
 
 
 
-
-
 async def cleanup_old_chunks(
     days: int = 30,
 ):
 
-    if not await collection_exists():
-
-        return
-
-
-
     cutoff = int(
 
         (
-
             datetime.now(
                 timezone.utc
             )
@@ -815,7 +675,7 @@ async def cleanup_old_chunks(
 
 
 
-    await get_qdrant_client().delete(
+    await get_client().delete(
 
         collection_name=COLLECTION_NAME,
 
@@ -840,9 +700,4 @@ async def cleanup_old_chunks(
 
         ),
 
-    )
-
-
-    logger.info(
-        "Old Qdrant memory cleaned."
     )
