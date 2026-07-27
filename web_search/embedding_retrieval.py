@@ -3,19 +3,16 @@ Dense embedding similarity retrieval layer.
 
 Pipeline position:
 
-Exa
- |
- v
-chunker.py
- |
- v
-filter.py
- |
- v
-embedding_retrieval.py
- |
- v
-reranker.py
+Qdrant Hybrid Retrieval / Filter
+        |
+        v
+FilterChunk
+        |
+        v
+Embedding Similarity
+        |
+        v
+Cloudflare Reranker
 
 
 Responsibilities:
@@ -31,9 +28,10 @@ This module does NOT know about:
 
 - Exa;
 - chunking;
-- filtering;
+- filtering logic;
 - reranking;
-- Qdrant;
+- Qdrant storage;
+- compression;
 - LLM.
 """
 
@@ -42,7 +40,7 @@ from __future__ import annotations
 
 
 import logging
-from typing import Any
+import os
 
 
 import numpy as np
@@ -54,9 +52,9 @@ from web_search.cloudflare_embeddings import (
 
 
 from web_search.models import (
-    EmbeddingResult,
+    FilteredChunk,
+    EmbeddingChunk,
 )
-
 
 
 logger = logging.getLogger(__name__)
@@ -68,7 +66,12 @@ logger = logging.getLogger(__name__)
 # ==========================================================
 
 
-EMBEDDING_TOP_K = 8
+EMBEDDING_TOP_K = int(
+    os.getenv(
+        "EMBEDDING_TOP_K",
+        "8",
+    )
+)
 
 
 
@@ -114,7 +117,6 @@ def _cosine_similarity(
         return 0.0
 
 
-
     return float(
 
         np.dot(
@@ -131,34 +133,36 @@ def _cosine_similarity(
 
 
 # ==========================================================
-# Embeddings
+# Embedding generation
 # ==========================================================
 
 
 async def _embed_chunks(
-    chunks: list[dict[str, Any]],
+    chunks: list[FilteredChunk],
 ) -> list[list[float]]:
     """
-    Generate embeddings for chunk texts.
+    Generate embeddings for chunks.
     """
-
-
-    embedder = get_embedding_model()
 
 
     texts = [
 
-        chunk.get(
-            "text",
-            "",
-        )
+        chunk.text
 
         for chunk in chunks
 
     ]
 
 
-    return await embedder.embed_documents(
+    if not texts:
+
+        return []
+
+
+    model = get_embedding_model()
+
+
+    return await model.embed_documents(
         texts
     )
 
@@ -171,47 +175,37 @@ async def _embed_chunks(
 
 async def retrieve_by_embedding_similarity(
     query: str,
-    chunks: list[dict[str, Any]],
+    chunks: list[FilteredChunk],
     top_k: int = EMBEDDING_TOP_K,
-) -> list[dict[str, Any]]:
+) -> list[EmbeddingChunk]:
     """
     Dense semantic retrieval.
 
     Input:
 
-        Filtered chunks
+        FilteredChunk list
+
 
     Output:
 
-        EmbeddingResult-compatible chunks
-
-        with:
-
-            similarity_score
+        TOP K EmbeddingChunk
 
 
-    Pipeline:
+    Added field:
 
-        TOP filtered chunks
+        embedding_score
 
-                |
 
-                v
+    Next stage:
 
-        Dense similarity
-
-                |
-
-                v
-
-        TOP K semantic chunks
+        reranker.py
     """
 
 
     if not chunks:
 
         logger.info(
-            "No chunks provided for embedding retrieval."
+            "No chunks for embedding retrieval."
         )
 
         return []
@@ -228,11 +222,11 @@ async def retrieve_by_embedding_similarity(
 
 
 
-    embedder = get_embedding_model()
+    embedding_model = get_embedding_model()
 
 
 
-    query_vector = await embedder.embed_query(
+    query_vector = await embedding_model.embed_query(
         query
     )
 
@@ -262,18 +256,16 @@ async def retrieve_by_embedding_similarity(
 
 
 
-    scored_chunks: list[
-        tuple[
-            float,
-            dict[str, Any]
-        ]
-    ] = []
+    scored_chunks: list[EmbeddingChunk] = []
 
 
 
     for chunk, vector in zip(
+
         chunks,
+
         chunk_vectors,
+
     ):
 
 
@@ -286,24 +278,13 @@ async def retrieve_by_embedding_similarity(
         )
 
 
-
-        enriched = {
-
-            **chunk,
-
-            "similarity_score": score,
-
-        }
-
-
-
         scored_chunks.append(
 
-            (
+            EmbeddingChunk(
 
-                score,
+                **chunk.model_dump(),
 
-                enriched,
+                embedding_score=score,
 
             )
 
@@ -314,7 +295,8 @@ async def retrieve_by_embedding_similarity(
     scored_chunks.sort(
 
         key=lambda item:
-            item[0],
+
+            item.embedding_score,
 
         reverse=True,
 
@@ -322,27 +304,13 @@ async def retrieve_by_embedding_similarity(
 
 
 
-    result = [
-
-
-        EmbeddingResult(
-            **chunk
-        ).model_dump()
-
-
-        for _, chunk
-
-        in scored_chunks[:top_k]
-
-
-    ]
+    result = scored_chunks[:top_k]
 
 
 
     logger.info(
 
-        "Embedding retrieval completed. "
-        "selected=%d/%d",
+        "Embedding retrieval completed. selected=%d/%d",
 
         len(result),
 
