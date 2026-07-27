@@ -29,7 +29,7 @@ from web_search.cloudflare_embeddings import (
 from web_search.models import (
     FilteredChunk,
     EmbeddedChunk,
-    DenseEmbeddingVector
+    DenseVector
 )
 
 
@@ -57,8 +57,8 @@ EMBEDDING_TOP_K = int(
 
 
 def _cosine_similarity(
-    query_vector: DenseEmbeddingVector,
-    document_vector: DenseEmbeddingVector,
+    query_vector: DenseVector,
+    document_vector: DenseVector,
 ) -> float:
     """
     Calculate cosine similarity.
@@ -115,7 +115,7 @@ def _cosine_similarity(
 
 async def _embed_chunks(
     chunks: list[FilteredChunk],
-) -> list[DenseEmbeddingVector]:
+) -> list[DenseVector]:
     """
     Generate embeddings for chunks.
     """
