@@ -366,6 +366,8 @@ async def store_chunks(
         logger.warning(
             "No embeddings generated. Skip storing chunks."
         )
+        
+        return
 
     if len(dense_vectors) != len(chunks):
         
@@ -487,6 +489,8 @@ async def hybrid_search(
         .embed_query(
             query.normalized
         ).values
+        
+    )
 
 
     sparse_query = _sparse_embedding(
