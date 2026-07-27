@@ -286,7 +286,7 @@ async def _ensure_payload_indexes():
 
 async def _dense_embeddings(
     texts: list[str],
-): -> list[DenseVector]
+): -> list[DenseVector]:
 
     model = get_embedding_model()
 
