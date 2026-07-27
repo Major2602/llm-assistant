@@ -40,6 +40,8 @@ from tenacity import (
 )
 
 
+from web_search.models import DenseEmbeddingVector
+
 
 logger = logging.getLogger(__name__)
 
