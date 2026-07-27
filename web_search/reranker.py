@@ -3,19 +3,19 @@ Cloudflare Workers AI reranker layer.
 
 Pipeline position:
 
-Embedding similarity
+Embedding Similarity
         |
         v
-TOP 5-8 chunks
+EmbeddingChunk
         |
         v
-Cloudflare reranker
+Cloudflare Reranker
         |
         v
-TOP 3-5 RankedChunk
+RankedChunk
         |
         v
-Extractive compression
+Extractive Compression
 
 
 Responsibilities:
@@ -24,20 +24,23 @@ Responsibilities:
 - deep relevance scoring;
 - reducing candidate chunks.
 
-Does NOT:
+
+This module does NOT:
 
 - retrieve documents;
 - generate embeddings;
-- compress context;
 - store data;
+- compress context;
 - build LLM context.
 """
+
 
 from __future__ import annotations
 
 
 import logging
 import os
+
 
 from typing import Any
 
@@ -54,11 +57,13 @@ from tenacity import (
 
 
 from web_search.models import (
+    EmbeddingChunk,
     RankedChunk,
 )
 
 
 logger = logging.getLogger(__name__)
+
 
 
 # ==========================================================
@@ -116,6 +121,7 @@ API_URL = (
 )
 
 
+
 # ==========================================================
 # Exceptions
 # ==========================================================
@@ -123,13 +129,13 @@ API_URL = (
 
 class CloudflareRerankerError(Exception):
     """
-    Cloudflare reranker service error.
+    Cloudflare reranker exception.
     """
 
 
 
 # ==========================================================
-# HTTP Client
+# HTTP client
 # ==========================================================
 
 
@@ -139,18 +145,13 @@ _client: httpx.AsyncClient | None = None
 
 def get_http_client() -> httpx.AsyncClient:
     """
-    Return shared async HTTP client.
+    Shared async HTTP client.
     """
 
     global _client
 
 
     if _client is None:
-
-        logger.info(
-            "Initializing Cloudflare reranker HTTP client."
-        )
-
 
         _client = httpx.AsyncClient(
 
@@ -184,26 +185,9 @@ def _parse_scores(
     payload: dict[str, Any],
 ) -> list[float]:
     """
-    Extract reranker scores.
-
-    Supported formats:
-
-    result:
-    {
-        scores: []
-    }
-
-    or:
-
-    result:
-    {
-        data: [
-            {
-                score: float
-            }
-        ]
-    }
+    Extract scores from Cloudflare response.
     """
+
 
     if not payload.get(
         "success",
@@ -211,13 +195,11 @@ def _parse_scores(
     ):
 
         raise CloudflareRerankerError(
-
             str(
                 payload.get(
                     "errors"
                 )
             )
-
         )
 
 
@@ -308,17 +290,14 @@ def _parse_scores(
 
 
 # ==========================================================
-# Service
+# Reranker service
 # ==========================================================
 
 
 class CloudflareReranker:
     """
-    Cloudflare bge-reranker wrapper.
-
-    Produces RankedChunk objects.
+    Cloudflare bge-reranker-base wrapper.
     """
-
 
 
     @retry(
@@ -351,10 +330,10 @@ class CloudflareReranker:
         documents: list[str],
 
     ) -> list[float]:
-
         """
         Request relevance scores.
         """
+
 
         if not documents:
 
@@ -382,11 +361,8 @@ class CloudflareReranker:
         response.raise_for_status()
 
 
-        payload = response.json()
-
-
         return _parse_scores(
-            payload
+            response.json()
         )
 
 
@@ -397,47 +373,34 @@ class CloudflareReranker:
 
         query: str,
 
-        chunks: list[dict[str, Any]],
+        chunks: list[EmbeddingChunk],
 
-        top_k: int | None = None,
+        top_k: int = DEFAULT_TOP_K,
 
     ) -> list[RankedChunk]:
-
         """
         Rerank embedding candidates.
 
         Input:
 
-            TOP 5-8 chunks
+            TOP embedding chunks
 
 
         Output:
 
-            TOP 3-5 RankedChunk
+            TOP RankedChunk
+
         """
+
 
         if not chunks:
 
             return []
 
 
-        limit = (
-
-            top_k
-
-            if top_k is not None
-
-            else DEFAULT_TOP_K
-
-        )
-
-
         documents = [
 
-            chunk.get(
-                "text",
-                "",
-            )
+            chunk.text
 
             for chunk in chunks
 
@@ -458,39 +421,37 @@ class CloudflareReranker:
             raise CloudflareRerankerError(
 
                 (
-                    "Rerank score count mismatch. "
 
-                    f"Expected={len(chunks)} "
+                    "Score count mismatch. "
 
-                    f"Received={len(scores)}"
+                    f"chunks={len(chunks)} "
 
-                )
-
-            )
-
-
-        ranked: list[RankedChunk] = []
-
-
-        for chunk, score in zip(
-
-            chunks,
-
-            scores,
-
-        ):
-
-            ranked.append(
-
-                RankedChunk(
-
-                    **chunk,
-
-                    rerank_score=score,
+                    f"scores={len(scores)}"
 
                 )
 
             )
+
+
+
+        ranked = [
+
+            RankedChunk(
+
+                **chunk.model_dump(),
+
+                rerank_score=score,
+
+            )
+
+            for chunk, score
+
+            in zip(
+                chunks,
+                scores,
+            )
+
+        ]
 
 
 
@@ -505,16 +466,16 @@ class CloudflareReranker:
         )
 
 
-        result = ranked[:limit]
+        result = ranked[:top_k]
 
 
         logger.info(
 
-            "Reranked chunks. input=%d output=%d",
-
-            len(chunks),
+            "Reranking completed. selected=%d/%d",
 
             len(result),
+
+            len(chunks),
 
         )
 
@@ -537,15 +498,11 @@ def get_reranker() -> CloudflareReranker:
     Return singleton reranker.
     """
 
+
     global _reranker
 
 
     if _reranker is None:
-
-        logger.info(
-            "Initializing CloudflareReranker singleton."
-        )
-
 
         _reranker = CloudflareReranker()
 
