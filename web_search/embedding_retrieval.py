@@ -28,7 +28,7 @@ from web_search.cloudflare_embeddings import (
 
 from web_search.models import (
     FilteredChunk,
-    EmbeddingChunk,
+    EmbeddedChunk,
 )
 
 
@@ -152,28 +152,9 @@ async def retrieve_by_embedding_similarity(
     query: str,
     chunks: list[FilteredChunk],
     top_k: int = EMBEDDING_TOP_K,
-) -> list[EmbeddingChunk]:
+) -> list[EmbeddedChunk]:
     """
     Dense semantic retrieval.
-
-    Input:
-
-        FilteredChunk list
-
-
-    Output:
-
-        TOP K EmbeddingChunk
-
-
-    Added field:
-
-        embedding_score
-
-
-    Next stage:
-
-        reranker.py
     """
 
 
@@ -231,7 +212,7 @@ async def retrieve_by_embedding_similarity(
 
 
 
-    scored_chunks: list[EmbeddingChunk] = []
+    scored_chunks: list[EmbeddedChunk] = []
 
 
 
@@ -255,11 +236,11 @@ async def retrieve_by_embedding_similarity(
 
         scored_chunks.append(
 
-            EmbeddingChunk(
+            EmbeddedChunk(
 
                 **chunk.model_dump(),
 
-                embedding_score=score,
+                similarity_score=score,
 
             )
 
