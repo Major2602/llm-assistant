@@ -205,7 +205,7 @@ class RetrievalDecision(BaseModel):
 
     cache_hit: bool = False
 
-    reuslts: list[HybridRetrievalResult] = Field(
+    results: list[HybridRetrievalResult] = Field(
         default_factory=list
     )
 
