@@ -156,7 +156,7 @@ class CompressedChunk(RankedChunk):
 # ==========================================================
 
 
-class DenseVectorContract(BaseModel):
+class DenseVector(BaseModel):
     """
     Dense embedding vector.
     """
@@ -165,7 +165,7 @@ class DenseVectorContract(BaseModel):
 
 
 
-class SparseVectorContract(BaseModel):
+class SparseVector(BaseModel):
     """
     BM25 sparse vector.
 
