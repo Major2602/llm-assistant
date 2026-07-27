@@ -3,44 +3,34 @@ Chunk quality filtering layer.
 
 Pipeline position:
 
-Exa
- |
- v
-Document normalize
- |
- v
-Chunker
- |
- v
-filter.py
- |
- v
+DocumentChunk
+        |
+        v
+Filter chunks
+        |
+        v
+TOP 10 FilteredChunk
+        |
+        v
 Embedding similarity
- |
- v
-Cloudflare reranker
- |
- v
-Compression
 
 
 Responsibilities:
 
 - remove invalid chunks;
 - remove duplicates;
-- apply lightweight lexical scoring;
-- reduce candidate pool before embeddings.
+- calculate lightweight quality score;
+- reduce candidate pool.
 
 
-This module does NOT know about:
+This module does NOT:
 
-- embeddings;
-- Qdrant;
-- reranking;
-- compression;
-- LLM.
+- generate embeddings;
+- access Qdrant;
+- rerank;
+- compress;
+- call LLM.
 """
-
 
 from __future__ import annotations
 
@@ -89,13 +79,17 @@ def _normalize_text(
     text: str,
 ) -> str:
     """
-    Normalize text for lexical comparison.
+    Normalize text for comparison.
     """
 
     return re.sub(
+
         r"[^a-zA-Zа-яА-Я0-9 ]+",
+
         " ",
+
         text.lower(),
+
     )
 
 
@@ -122,16 +116,16 @@ def _tokens(
 
 
 # ==========================================================
-# Scoring
+# Scores
 # ==========================================================
 
 
-def _query_overlap_score(
+def _keyword_score(
     query: str,
     chunk: DocumentChunk,
 ) -> float:
     """
-    Lightweight lexical relevance score.
+    Query keyword overlap score.
     """
 
     query_tokens = _tokens(
@@ -144,24 +138,19 @@ def _query_overlap_score(
         return 0.0
 
 
-
-    chunk_text = (
+    content = (
 
         chunk.title
 
-        +
+        + " "
 
-        " "
-
-        +
-
-        chunk.text
+        + chunk.text
 
     )
 
 
     chunk_tokens = _tokens(
-        chunk_text
+        content
     )
 
 
@@ -172,7 +161,9 @@ def _query_overlap_score(
             &
             chunk_tokens
         )
+
         /
+
         len(query_tokens),
 
         1.0,
@@ -185,10 +176,10 @@ def _quality_score(
     chunk: DocumentChunk,
 ) -> float:
     """
-    Estimate chunk information quality.
+    Estimate information quality.
     """
 
-    text = chunk.text
+    text = chunk.text.strip()
 
 
     if len(text) < MIN_TEXT_LENGTH:
@@ -218,10 +209,7 @@ def _quality_score(
 
         /
 
-        max(
-            len(words),
-            1,
-        )
+        len(words)
 
     )
 
@@ -233,12 +221,6 @@ def _quality_score(
 
 
 
-    if len(text) > 5000:
-
-        score -= 0.1
-
-
-
     return max(
         score,
         0.0,
@@ -246,11 +228,42 @@ def _quality_score(
 
 
 
+def _length_score(
+    chunk: DocumentChunk,
+) -> float:
+    """
+    Prefer medium sized chunks.
+    """
+
+    length = len(
+        chunk.text
+    )
+
+
+    if 500 <= length <= 3000:
+
+        return 1.0
+
+
+    if length < 300:
+
+        return 0.3
+
+
+    if length > 5000:
+
+        return 0.5
+
+
+    return 0.8
+
+
+
 def _metadata_score(
     chunk: DocumentChunk,
 ) -> float:
     """
-    Score metadata completeness.
+    Metadata completeness.
     """
 
     score = 0.0
@@ -280,33 +293,44 @@ def _calculate_score(
     chunk: DocumentChunk,
 ) -> float:
     """
-    Combined filtering score.
+    Combined lightweight filtering score.
     """
 
     return (
 
-        _query_overlap_score(
+        _keyword_score(
             query,
             chunk,
         )
-        *
-        0.5
+
+        * 0.45
+
 
         +
 
         _quality_score(
             chunk,
         )
-        *
-        0.35
+
+        * 0.30
+
+
+        +
+
+        _length_score(
+            chunk,
+        )
+
+        * 0.15
+
 
         +
 
         _metadata_score(
             chunk,
         )
-        *
-        0.15
+
+        * 0.10
 
     )
 
@@ -321,16 +345,16 @@ def _fingerprint(
     text: str,
 ) -> str:
     """
-    Create lightweight text fingerprint.
+    Create duplicate fingerprint.
     """
 
     return (
 
-        text[:500]
+        _normalize_text(
+            text[:500]
+        )
 
         .strip()
-
-        .lower()
 
     )
 
@@ -343,13 +367,14 @@ def _deduplicate(
     Remove duplicate chunks.
     """
 
-    result: list[DocumentChunk] = []
+    result = []
 
-    seen: set[str] = set()
 
+    seen = set()
 
 
     for chunk in chunks:
+
 
         fingerprint = _fingerprint(
             chunk.text
@@ -359,7 +384,6 @@ def _deduplicate(
         if fingerprint in seen:
 
             continue
-
 
 
         seen.add(
@@ -386,7 +410,7 @@ def filter_chunks(
     query: str,
 ) -> list[FilteredChunk]:
     """
-    Filter semantic chunks.
+    Filter chunks before embedding retrieval.
 
     Input:
 
@@ -395,12 +419,7 @@ def filter_chunks(
 
     Output:
 
-        TOP filtered chunks with filter_score
-
-
-    Next stage:
-
-        embedding similarity
+        TOP FilteredChunk list
     """
 
     if not chunks:
@@ -408,21 +427,15 @@ def filter_chunks(
         return []
 
 
-
     logger.info(
-
         "Filtering chunks=%d",
-
         len(chunks),
-
     )
-
 
 
     unique_chunks = _deduplicate(
         chunks
     )
-
 
 
     scored: list[
@@ -431,7 +444,6 @@ def filter_chunks(
             FilteredChunk
         ]
     ] = []
-
 
 
     for chunk in unique_chunks:
@@ -462,7 +474,9 @@ def filter_chunks(
 
             (
                 score,
+
                 filtered,
+
             )
 
         )
@@ -478,27 +492,21 @@ def filter_chunks(
     )
 
 
-
     result = [
 
-        chunk
+        item
 
-        for _, chunk
+        for _, item
 
         in scored[:MAX_OUTPUT_CHUNKS]
 
     ]
 
 
-
     logger.info(
-
         "Filtered chunks=%d",
-
         len(result),
-
     )
-
 
 
     return result
