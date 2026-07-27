@@ -7,7 +7,6 @@ from __future__ import annotations
 
 
 from typing import Any
-from datetime import datetime
 
 
 from pydantic import BaseModel, Field
@@ -300,4 +299,4 @@ class PipelineMetadata(BaseModel):
 
     request_id: str | None = None
 
-    created_at: str | None = None
+    created_at: int | None = None
