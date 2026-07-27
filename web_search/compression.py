@@ -1,32 +1,13 @@
 """
 Extractive compression layer.
 
-Pipeline position:
-
-Cloudflare reranker
-        |
-        v
-compression.py
-        |
-        v
-Context optimizer
-
-
-Responsibilities:
+Module Responsibilities:
 
 - reduce chunk size;
 - keep most relevant sentences;
 - preserve citations;
 - preserve metadata;
 - remove redundant information.
-
-
-Does NOT:
-
-- call LLM;
-- call external APIs;
-- access Qdrant;
-- modify ranking logic.
 """
 
 
@@ -49,6 +30,7 @@ from web_search.cloudflare_embeddings import (
 
 
 from web_search.models import (
+    RankedChunk,
     CompressedChunk,
 )
 
@@ -319,16 +301,13 @@ def _remove_redundant(
 
 async def _compress_chunk(
     query: str,
-    chunk: dict[str, Any],
+    chunk: RankedChunk,
 ) -> CompressedChunk:
     """
     Compress single chunk.
     """
 
-    text = chunk.get(
-        "text",
-        "",
-    )
+    text = chunk.text
 
 
     sentences = _split_sentences(
@@ -373,7 +352,7 @@ async def _compress_chunk(
 
     return CompressedChunk(
 
-        **chunk,
+        **chunk.model_dump(),
 
         compressed_text=compressed_text,
 
@@ -390,7 +369,7 @@ async def _compress_chunk(
 
 async def compress_chunks(
     query: str,
-    chunks: list[dict[str, Any]],
+    chunks: list[RankedChunk],
 ) -> list[CompressedChunk]:
     """
     Compress reranked chunks.
