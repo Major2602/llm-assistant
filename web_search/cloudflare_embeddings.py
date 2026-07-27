@@ -505,7 +505,7 @@ class CloudflareEmbeddings:
     async def embed_documents(
         self,
         texts: list[str],
-    ) -> list[list[float]]:
+    ) -> list[DenseEmbeddingVector]:
         """
         Generate embeddings for multiple texts.
         """
@@ -557,14 +557,22 @@ class CloudflareEmbeddings:
             )
 
 
-        return result
+        return [
+            
+            DenseEmbeddingVector(
+                values=vector
+            )
+            
+            for vector in result
+            
+        ]
 
 
 
     async def embed_query(
         self,
         query: str,
-    ) -> list[float]:
+    ) -> DenseEmbeddingVector:
         """
         Generate embedding for query.
         """
@@ -594,7 +602,11 @@ class CloudflareEmbeddings:
             )
 
 
-        return result[0]
+        return DenseEmbeddingVector(
+            
+            values=result[0]
+
+        )
 
 
 
