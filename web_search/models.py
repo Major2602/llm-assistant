@@ -118,6 +118,8 @@ class FilteredChunk(DocumentChunk):
 
     filter_score: float = 0.0
 
+    length_score: float = 0.0
+
 
 
 class EmbeddedChunk(FilteredChunk):
@@ -192,7 +194,7 @@ class HybridRetrievalResult(BaseModel):
 
     sparse_score: float = 0.0
 
-    fusion_score: float = 0.0
+    rrf_score: float = 0.0
 
     retrieved_from: str = "qdrant"
 
