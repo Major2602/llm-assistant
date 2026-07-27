@@ -252,7 +252,7 @@ async def retrieve_by_embedding_similarity(
 
         key=lambda item:
 
-            item.embedding_score,
+            item.similarity_score,
 
         reverse=True,
 
