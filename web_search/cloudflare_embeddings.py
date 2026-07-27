@@ -40,7 +40,7 @@ from tenacity import (
 )
 
 
-from web_search.models import DenseEmbeddingVector
+from web_search.models import DenseVector
 
 
 logger = logging.getLogger(__name__)
@@ -507,7 +507,7 @@ class CloudflareEmbeddings:
     async def embed_documents(
         self,
         texts: list[str],
-    ) -> list[DenseEmbeddingVector]:
+    ) -> list[DenseVector]:
         """
         Generate embeddings for multiple texts.
         """
@@ -561,7 +561,7 @@ class CloudflareEmbeddings:
 
         return [
             
-            DenseEmbeddingVector(
+            DenseVector(
                 values=vector
             )
             
@@ -574,7 +574,7 @@ class CloudflareEmbeddings:
     async def embed_query(
         self,
         query: str,
-    ) -> DenseEmbeddingVector:
+    ) -> DenseVector:
         """
         Generate embedding for query.
         """
@@ -604,7 +604,7 @@ class CloudflareEmbeddings:
             )
 
 
-        return DenseEmbeddingVector(
+        return DenseVector(
             
             values=result[0]
 
