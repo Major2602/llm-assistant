@@ -156,7 +156,7 @@ class CompressedChunk(RankedChunk):
 # ==========================================================
 
 
-class DenseEmbeddingVector(BaseModel):
+class DenseVector(BaseModel):
     """
     Dense embedding vector.
     """
