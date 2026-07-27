@@ -190,10 +190,6 @@ class HybridRetrievalResult(BaseModel):
 
     chunk: DocumentChunk
 
-    dense_score: float = 0.0
-
-    sparse_score: float = 0.0
-
     rrf_score: float = 0.0
 
     retrieved_from: str = "qdrant"
