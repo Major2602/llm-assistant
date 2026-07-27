@@ -361,7 +361,21 @@ async def store_chunks(
         texts
     )
 
+    if not dense_vectors:
 
+        logger.warning(
+            "No embeddings generated. Skip storing chunks."
+        )
+
+    if len(dense_vectors) != len(chunks):
+        
+        raise RuntimeError(
+            (
+                "Embedding count mismatch. "
+                f"chunks={len(chunks)} "
+                f"vectors={len(dense_vectors)}"
+            )
+        )
 
     await ensure_collection(
 
@@ -467,11 +481,12 @@ async def hybrid_search(
 
 
 
-    dense_query = await get_embedding_model().embed_query(
-
-        query.normalized
-
-    ).values
+    dense_query = (
+        
+        await get_embedding_model()
+        .embed_query(
+            query.normalized
+        ).values
 
 
     sparse_query = _sparse_embedding(
@@ -556,7 +571,7 @@ async def hybrid_search(
 
                 chunk=chunk,
 
-                rrf_score=point.score,
+                rrf_score=point.score or 0.0,
 
                 retrieved_from = "qdrant"
 
