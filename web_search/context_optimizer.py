@@ -3,10 +3,7 @@ Final context optimization layer.
 
 Pipeline position:
 
-Ranked chunks
-        |
-        v
-Compression
+Compressed chunks
         |
         v
 Context optimization
@@ -17,6 +14,7 @@ AgentContext
         +----------------+
         |                |
         v                v
+
     Groq LLM        Citations
 
 
@@ -25,7 +23,8 @@ Responsibilities:
 - prepare LLM context;
 - control context size;
 - preserve citations;
-- create final source mapping.
+- create source mapping;
+- build final AgentContext.
 
 
 Does NOT:
@@ -37,10 +36,12 @@ Does NOT:
 - access Qdrant.
 """
 
+
 from __future__ import annotations
 
 
 import logging
+
 
 from typing import Any
 
@@ -56,6 +57,7 @@ from web_search.models import (
 logger = logging.getLogger(__name__)
 
 
+
 # ==========================================================
 # Configuration
 # ==========================================================
@@ -63,7 +65,9 @@ logger = logging.getLogger(__name__)
 
 MAX_CONTEXT_CHARS = 12000
 
+
 MAX_SOURCES = 5
+
 
 CHARS_PER_TOKEN = 4
 
@@ -78,11 +82,13 @@ def _estimate_tokens(
     text: str,
 ) -> int:
     """
-    Approximate token count.
+    Approximate token estimation.
     """
 
     if not text:
+
         return 0
+
 
     return max(
         1,
@@ -95,7 +101,7 @@ def _sort_chunks(
     chunks: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """
-    Sort by final relevance.
+    Sort compressed chunks by relevance.
 
     Priority:
 
@@ -110,31 +116,24 @@ def _sort_chunks(
 
             chunk.get(
                 "rerank_score",
-                0,
+                0.0,
             )
 
             or
 
             chunk.get(
                 "similarity_score",
-                0,
-            )
-
-            or
-
-            chunk.get(
-                "embedding_score",
-                0,
+                0.0,
             )
 
             or
 
             chunk.get(
                 "filter_score",
-                0,
+                0.0,
             )
 
-            or 0
+            or 0.0
 
         ),
         reverse=True,
@@ -146,7 +145,7 @@ def _build_source(
     chunk: dict[str, Any],
 ) -> Source:
     """
-    Create citation source model.
+    Convert chunk metadata into citation source.
     """
 
     return Source(
@@ -192,10 +191,13 @@ def _extract_sources(
 
     sources: list[Source] = []
 
-    seen_urls: set[str] = set()
+
+    seen: set[str] = set()
+
 
 
     for chunk in chunks:
+
 
         source = _build_source(
             chunk
@@ -203,14 +205,16 @@ def _extract_sources(
 
 
         if not source.url:
+
             continue
 
 
-        if source.url in seen_urls:
+        if source.url in seen:
+
             continue
 
 
-        seen_urls.add(
+        seen.add(
             source.url
         )
 
@@ -221,24 +225,27 @@ def _extract_sources(
 
 
         if len(sources) >= MAX_SOURCES:
+
             break
+
 
 
     return sources
 
 
 
-def _build_context_documents(
+def _build_documents(
     chunks: list[dict[str, Any]],
 ) -> list[ContextDocument]:
     """
-    Convert chunks into final context documents.
+    Convert compressed chunks into context documents.
     """
 
     documents: list[ContextDocument] = []
 
 
     for chunk in chunks:
+
 
         text = (
 
@@ -250,14 +257,39 @@ def _build_context_documents(
 
             chunk.get(
                 "text",
-                ""
+                "",
             )
 
         )
 
 
         if not text:
+
             continue
+
+
+
+        score = (
+
+            chunk.get(
+                "rerank_score"
+            )
+
+            or
+
+            chunk.get(
+                "similarity_score"
+            )
+
+            or
+
+            chunk.get(
+                "filter_score"
+            )
+
+            or 0.0
+
+        )
 
 
         documents.append(
@@ -270,27 +302,7 @@ def _build_context_documents(
                     chunk
                 ),
 
-                relevance_score=(
-
-                    chunk.get(
-                        "rerank_score"
-                    )
-
-                    or
-
-                    chunk.get(
-                        "similarity_score"
-                    )
-
-                    or
-
-                    chunk.get(
-                        "filter_score"
-                    )
-
-                    or 0.0
-
-                ),
+                relevance_score=score,
 
             )
 
@@ -301,22 +313,25 @@ def _build_context_documents(
 
 
 
-def _build_llm_text(
+def _build_llm_context(
     documents: list[ContextDocument],
 ) -> str:
     """
-    Build final text context.
+    Build final LLM prompt context.
     """
 
     sections: list[str] = []
 
-    current_length = 0
+
+    current_size = 0
+
 
 
     for index, document in enumerate(
         documents,
         start=1,
     ):
+
 
         section = f"""
 SOURCE [{index}]
@@ -332,23 +347,33 @@ URL:
 """
 
 
+        section = section.strip()
+
+
         size = len(section)
 
 
         if (
-            current_length + size
+
+            current_size + size
+
             >
+
             MAX_CONTEXT_CHARS
+
         ):
+
             break
 
 
+
         sections.append(
-            section.strip()
+            section
         )
 
 
-        current_length += size
+        current_size += size
+
 
 
     return "\n\n".join(
@@ -361,14 +386,19 @@ def _build_citation_map(
     sources: list[Source],
 ) -> dict[str, Source]:
     """
-    Create source lookup map.
+    Create citation lookup map.
     """
 
     return {
-        str(index + 1): source
-        for index, source in enumerate(
-            sources
-        )
+
+        str(index + 1):
+
+            source
+
+        for index, source
+
+        in enumerate(sources)
+
     }
 
 
@@ -383,11 +413,11 @@ def optimize_context(
     chunks: list[dict[str, Any]],
 ) -> AgentContext:
     """
-    Prepare final agent context.
+    Prepare final context for agent.
 
     Input:
 
-        compressed ranked chunks
+        CompressedChunk list
 
 
     Output:
@@ -417,7 +447,7 @@ def optimize_context(
     )
 
 
-    documents = _build_context_documents(
+    documents = _build_documents(
         ranked_chunks
     )
 
@@ -427,7 +457,7 @@ def optimize_context(
     )
 
 
-    context_text = _build_llm_text(
+    context_text = _build_llm_context(
         documents
     )
 
@@ -449,11 +479,17 @@ def optimize_context(
     )
 
 
+
     logger.info(
-        "Context optimized chars=%d sources=%d tokens=%d",
+
+        "Context ready chars=%d tokens=%d sources=%d",
+
         len(context_text),
-        len(sources),
+
         optimized.total_tokens,
+
+        len(sources),
+
     )
 
 
