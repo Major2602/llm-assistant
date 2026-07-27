@@ -452,7 +452,7 @@ class CloudflareEmbeddings:
             for text in texts
         ):
 
-            raise CloudFlareEmbeddingError(
+            raise CloudflareEmbeddingError(
                 "Empty text passed to embedding API"
             )
 
