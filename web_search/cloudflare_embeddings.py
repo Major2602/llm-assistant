@@ -437,7 +437,7 @@ class CloudflareEmbeddings:
     async def _request(
         self,
         texts: list[str],
-    ) -> list[list[float]]:
+    ) -> list[DenseVector]:
         """
         Execute embedding request.
         """
@@ -500,7 +500,17 @@ class CloudflareEmbeddings:
             )
 
 
-        return embeddings
+        return [
+            
+            DenseVector(
+                
+                values=vector
+                
+            )
+
+            for vector in embeddings
+            
+        ]
 
 
 
@@ -604,11 +614,7 @@ class CloudflareEmbeddings:
             )
 
 
-        return DenseVector(
-            
-            values=result[0]
-
-        )
+        return result[0]
 
 
 
