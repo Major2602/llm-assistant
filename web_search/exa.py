@@ -1,46 +1,12 @@
 """
 Exa web retrieval layer.
 
-Pipeline position:
-
-USER QUERY
-    |
-    v
-Query Normalizing
-    |
-    v
-Qdrant Hybrid Retrieval
-
-CACHE MISS
-    |
-    v
-Exa Search
-    |
-    v
-Document Normalize
-    |
-    v
-Chunker
-
-
-Responsibilities:
+Module Responsibilities:
 
 - execute Exa search;
 - normalize external documents;
 - create WebDocument contracts;
 - preserve metadata.
-
-
-This module does NOT:
-
-- normalize queries;
-- call Qdrant;
-- generate embeddings;
-- chunk documents;
-- filter;
-- rerank;
-- compress;
-- call LLM.
 """
 
 
@@ -49,7 +15,9 @@ from __future__ import annotations
 
 import logging
 import os
+import uuid
 
+from uuid import uuid4
 from datetime import datetime, timezone
 from typing import Any
 
@@ -59,6 +27,7 @@ from exa_py import AsyncExa
 
 from web_search.models import (
     WebDocument,
+    Source
 )
 
 
@@ -196,53 +165,42 @@ def _normalize_document(
 
     return WebDocument(
 
-        title=(
-
-            _extract_value(
-                document,
-                "title",
-                None,
-            )
-
-            or
-
-            "Untitled"
-
-        ),
-
-
-        url=(
-
-            _extract_value(
-                document,
-                "url",
-                None,
-            )
-
-            or
-
-            ""
-
-        ),
-
+        id=str(uuid4()),
 
         text=text,
 
+        source=Source(
+        
+            title=(
+                _extract_value(
+                document,
+                "title",
+                None,
+                )
+                or "Untitled"
+            ),
 
-        provider="exa",
+            url=(
+                _extract_value(
+                    document,
+                    "url",
+                    None,
+                )
+                or ""
+            ),
 
+            provider="exa",
 
-        author=_extract_value(
-            document,
-            "author",
+            author=_extract_value(
+                document,
+                "author",
+            ),
+
+            published_date=_extract_value(
+                document,
+                "published_date",
+            ),
         ),
-
-
-        published_date=_extract_value(
-            document,
-            "published_date",
-        ),
-
 
         created_at=_current_timestamp(),
 
