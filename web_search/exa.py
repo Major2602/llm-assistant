@@ -1,40 +1,48 @@
 """
-Exa web search retrieval layer.
+Exa web retrieval layer.
 
 Pipeline position:
 
 USER QUERY
     |
     v
-Query preprocessing
+Query Normalizing
+    |
+    v
+Qdrant Hybrid Retrieval
+
+CACHE MISS
     |
     v
 Exa Search
     |
     v
-WebDocument
+Document Normalize
     |
     v
-chunker.py
+Chunker
 
 
 Responsibilities:
 
 - execute Exa search;
-- retrieve documents;
-- normalize metadata;
-- return WebDocument models.
+- normalize external documents;
+- create WebDocument contracts;
+- preserve metadata.
 
 
-This module does NOT know about:
+This module does NOT:
 
-- chunking;
-- filtering;
-- embeddings;
-- reranking;
-- Qdrant;
-- LLM.
+- normalize queries;
+- call Qdrant;
+- generate embeddings;
+- chunk documents;
+- filter;
+- rerank;
+- compress;
+- call LLM.
 """
+
 
 from __future__ import annotations
 
@@ -43,7 +51,6 @@ import logging
 import os
 
 from datetime import datetime, timezone
-
 from typing import Any
 
 
@@ -56,6 +63,7 @@ from web_search.models import (
 
 
 logger = logging.getLogger(__name__)
+
 
 
 # ==========================================================
@@ -76,9 +84,11 @@ EXA_RESULTS = int(
 )
 
 
+
 if not EXA_API_KEY:
+
     raise RuntimeError(
-        "Environment variable EXA_TOKEN is not configured."
+        "EXA_TOKEN environment variable is missing."
     )
 
 
@@ -88,35 +98,36 @@ if not EXA_API_KEY:
 # ==========================================================
 
 
-_client: AsyncExa | None = None
+_exa_client: AsyncExa | None = None
 
 
 
 def get_exa_client() -> AsyncExa:
     """
-    Return singleton Exa client.
+    Singleton Exa client.
     """
 
-    global _client
+    global _exa_client
 
 
-    if _client is None:
+    if _exa_client is None:
 
         logger.info(
             "Initializing Exa client."
         )
 
-        _client = AsyncExa(
+
+        _exa_client = AsyncExa(
             api_key=EXA_API_KEY
         )
 
 
-    return _client
+    return _exa_client
 
 
 
 # ==========================================================
-# Normalization
+# Timestamp
 # ==========================================================
 
 
@@ -133,32 +144,44 @@ def _current_timestamp() -> int:
 
 
 
+# ==========================================================
+# Normalization
+# ==========================================================
+
+
+def _extract_value(
+    document: Any,
+    field: str,
+    default: Any = None,
+) -> Any:
+    """
+    Safe attribute extraction.
+    """
+
+    return getattr(
+        document,
+        field,
+        default,
+    )
+
+
+
 def _normalize_document(
     document: Any,
-    query: str,
 ) -> WebDocument | None:
     """
-    Convert Exa response into internal model.
-
-    Exa output:
-
-        external object
-
-            |
-
-            v
-
-        WebDocument
+    Convert Exa object into internal contract.
     """
 
     text = (
-        getattr(
+        _extract_value(
             document,
             "text",
-            None,
+            "",
         )
         or ""
     ).strip()
+
 
 
     if not text:
@@ -173,12 +196,9 @@ def _normalize_document(
 
     return WebDocument(
 
-        query=query,
-
-
         title=(
 
-            getattr(
+            _extract_value(
                 document,
                 "title",
                 None,
@@ -193,7 +213,7 @@ def _normalize_document(
 
         url=(
 
-            getattr(
+            _extract_value(
                 document,
                 "url",
                 None,
@@ -212,22 +232,19 @@ def _normalize_document(
         provider="exa",
 
 
-        author=getattr(
+        author=_extract_value(
             document,
             "author",
-            None,
         ),
 
 
-        published_date=getattr(
+        published_date=_extract_value(
             document,
             "published_date",
-            None,
         ),
 
 
         created_at=_current_timestamp(),
-
 
         last_access=_current_timestamp(),
 
@@ -240,18 +257,18 @@ def _normalize_document(
 # ==========================================================
 
 
-async def _search(
+async def _search_exa(
     query: str,
 ) -> list[Any]:
     """
-    Execute Exa search request.
+    Execute Exa search.
     """
 
     client = get_exa_client()
 
 
     logger.info(
-        "Searching Exa. query=%s",
+        "Exa search started query=%s",
         query,
     )
 
@@ -286,11 +303,17 @@ async def search_exa(
     query: str,
 ) -> list[WebDocument]:
     """
-    Search Exa and return normalized documents.
+    Retrieve and normalize web documents.
+
+    Input:
+
+        normalized query
+
 
     Output:
 
         list[WebDocument]
+
 
     Next stage:
 
@@ -298,6 +321,7 @@ async def search_exa(
     """
 
     query = query.strip()
+
 
 
     if not query:
@@ -308,16 +332,19 @@ async def search_exa(
 
 
 
-    documents = await _search(
+    documents = await _search_exa(
         query
     )
 
 
+
     if not documents:
 
-        raise ValueError(
+        logger.warning(
             "Exa returned no documents."
         )
+
+        return []
 
 
 
@@ -328,11 +355,7 @@ async def search_exa(
     for document in documents:
 
         item = _normalize_document(
-
-            document,
-
-            query,
-
+            document
         )
 
 
@@ -351,14 +374,6 @@ async def search_exa(
         len(normalized),
 
     )
-
-
-
-    if not normalized:
-
-        raise ValueError(
-            "No usable Exa documents."
-        )
 
 
 
