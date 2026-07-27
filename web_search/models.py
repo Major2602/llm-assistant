@@ -1,69 +1,71 @@
 """
-Web search domain models.
+Web search pipeline contracts.
 
-Architecture contract:
+Architecture:
 
-User Query
+USER QUERY
     |
     v
-Query Preprocessing
+QueryNormalizer
     |
     v
 Qdrant Hybrid Retrieval
     |
-    +---------------- Cache Hit
-    |
-    +---------------- Cache Miss
-                         |
-                         v
-                    Exa Search
-                         |
-                         v
-                Document Normalize
-                         |
-                         v
-                      Chunking
-                         |
-                         v
-                      Filtering
-                         |
-                         v
-              Embedding Similarity
-                         |
-                         v
-                  Cloudflare Reranker
-                         |
-                         v
-              Extractive Compression
-                         |
-                         v
-              Context Optimization
-                         |
-                         v
-                    AgentContext
+    +-------------+
+    |             |
+ CACHE HIT    CACHE MISS
+                  |
+                  v
+              Exa Search
+                  |
+                  v
+              Document
+                  |
+                  v
+              Chunk
+                  |
+                  v
+              FilteredChunk
+                  |
+                  v
+              EmbeddedChunk
+                  |
+                  v
+              RankedChunk
+                  |
+                  v
+              CompressedChunk
+                  |
+                  v
+              ContextDocument
+                  |
+                  v
+              AgentContext
 
 
-This module contains only:
+This module contains ONLY:
 
-- pipeline data contracts;
-- validation models;
-- shared field definitions.
+- pydantic contracts;
+- pipeline data structures;
+- shared metadata definitions.
 
 This module does NOT:
 
-- call external APIs;
-- contain ranking logic;
-- contain storage logic;
-- contain retrieval logic;
-- contain business rules.
+- call APIs;
+- perform ranking;
+- access databases;
+- contain business logic.
 """
+
 
 from __future__ import annotations
 
 
 from typing import Any
 
+
 from pydantic import BaseModel, Field
+
 
 
 # ==========================================================
@@ -71,13 +73,13 @@ from pydantic import BaseModel, Field
 # ==========================================================
 
 
-class SearchQuery(BaseModel):
+class NormalizedQuery(BaseModel):
     """
-    Normalized user query.
+    User query after normalization.
 
     Produced by:
 
-        query_preprocessor.py
+        query_normalizer.py
 
     Used by:
 
@@ -90,11 +92,6 @@ class SearchQuery(BaseModel):
 
     language: str = "en"
 
-    intent: str = "general"
-
-    expanded_queries: list[str] = Field(
-        default_factory=list
-    )
 
 
 # ==========================================================
@@ -104,20 +101,20 @@ class SearchQuery(BaseModel):
 
 class Source(BaseModel):
     """
-    External citation source.
+    Citation source metadata.
 
     Used by:
 
-    - UI
-    - Agent
-    - Citations
+    - compression
+    - context
+    - final answer
     """
 
-    title: str = "Untitled source"
+    title: str = "Untitled"
 
     url: str = ""
 
-    provider: str | None = None
+    provider: str = "unknown"
 
     author: str | None = None
 
@@ -126,7 +123,7 @@ class Source(BaseModel):
 
 
 # ==========================================================
-# Documents
+# External documents
 # ==========================================================
 
 
@@ -136,49 +133,8 @@ class WebDocument(BaseModel):
 
     Produced by:
 
-        Exa
-
-    Consumed by:
-
-        chunker.py
+        exa.py
     """
-
-    query: str
-
-    title: str = "Untitled"
-
-    url: str = ""
-
-    text: str = ""
-
-    provider: str = "exa"
-
-    author: str | None = None
-
-    published_date: str | None = None
-
-
-
-# ==========================================================
-# Base chunk
-# ==========================================================
-
-
-class DocumentChunk(BaseModel):
-    """
-    Atomic retrieval unit.
-
-    Produced by:
-
-        chunker.py
-
-
-    Contains all persistent metadata.
-    """
-
-    id: str
-
-    query: str
 
     title: str = "Untitled"
 
@@ -186,16 +142,37 @@ class DocumentChunk(BaseModel):
 
     text: str
 
-    provider: str = "exa"
+    source: Source = Field(
+        default_factory=Source
+    )
+
+    created_at: int | None = None
+
+
+
+# ==========================================================
+# Chunk pipeline
+# ==========================================================
+
+
+class DocumentChunk(BaseModel):
+    """
+    Base retrieval chunk.
+
+    Produced by:
+
+        chunker.py
+    """
+
+    id: str
+
+    text: str
+
+    source: Source = Field(
+        default_factory=Source
+    )
 
     chunk_index: int = 0
-
-    author: str | None = None
-
-    published_date: str | None = None
-
-
-    # Unix timestamps.
 
     created_at: int | None = None
 
@@ -203,58 +180,88 @@ class DocumentChunk(BaseModel):
 
 
 
-# ==========================================================
-# Filtering
-# ==========================================================
-
-
 class FilteredChunk(DocumentChunk):
     """
     Chunk after heuristic filtering.
 
-    Produced by:
-
-        filter.py
-
     Added:
 
-        filter_score
+    - keyword score
+    - quality score
     """
+
+    keyword_score: float = 0.0
+
+    quality_score: float = 0.0
 
     filter_score: float = 0.0
 
 
 
-# ==========================================================
-# Embedding retrieval
-# ==========================================================
-
-
-class EmbeddingChunk(FilteredChunk):
+class EmbeddedChunk(FilteredChunk):
     """
-    Chunk after dense similarity retrieval.
-
-    Produced by:
-
-        embedding_retrieval.py
-
-    Added:
-
-        embedding_score
+    Chunk after dense embedding retrieval.
     """
 
-    embedding_score: float = 0.0
+    similarity_score: float = 0.0
 
 
 
-# ==========================================================
-# Hybrid retrieval
-# ==========================================================
-
-
-class HybridChunk(DocumentChunk):
+class RankedChunk(EmbeddedChunk):
     """
-    Chunk returned from Qdrant hybrid retrieval.
+    Chunk after Cloudflare reranking.
+    """
+
+    rerank_score: float = 0.0
+
+
+
+class CompressedChunk(RankedChunk):
+    """
+    Chunk after extractive compression.
+    """
+
+    compressed_text: str = ""
+
+    compression_ratio: float = 1.0
+
+
+
+# ==========================================================
+# Vector contracts
+# ==========================================================
+
+
+class DenseVector(BaseModel):
+    """
+    Dense embedding vector.
+    """
+
+    values: list[float]
+
+
+
+class SparseVector(BaseModel):
+    """
+    BM25 sparse vector.
+
+    Stored by Qdrant.
+    """
+
+    indices: list[int]
+
+    values: list[float]
+
+
+
+# ==========================================================
+# Retrieval
+# ==========================================================
+
+
+class HybridRetrievalResult(BaseModel):
+    """
+    Qdrant hybrid search result.
 
     Contains:
 
@@ -262,6 +269,8 @@ class HybridChunk(DocumentChunk):
     - sparse score
     - fusion score
     """
+
+    chunk: DocumentChunk
 
     dense_score: float = 0.0
 
@@ -272,66 +281,13 @@ class HybridChunk(DocumentChunk):
 
 
 # ==========================================================
-# Reranking
-# ==========================================================
-
-
-class RankedChunk(EmbeddingChunk):
-    """
-    Chunk after Cloudflare reranker.
-
-    Produced by:
-
-        reranker.py
-
-    Added:
-
-        rerank_score
-    """
-
-    rerank_score: float = 0.0
-
-
-
-# ==========================================================
-# Compression
-# ==========================================================
-
-
-class CompressedChunk(RankedChunk):
-    """
-    Chunk after extractive compression.
-
-    Produced by:
-
-        compression.py
-
-
-    Keeps:
-
-    - source metadata
-    - ranking scores
-    - compressed text
-    """
-
-    compressed_text: str = ""
-
-    compression_ratio: float = 1.0
-
-
-
-# ==========================================================
-# Optimized context
+# Context
 # ==========================================================
 
 
 class ContextDocument(BaseModel):
     """
-    Final context document for LLM.
-
-    Prepared by:
-
-        context_optimizer.py
+    Final document supplied to LLM.
     """
 
     text: str
@@ -344,9 +300,7 @@ class ContextDocument(BaseModel):
 
 class OptimizedContext(BaseModel):
     """
-    Final structured context package.
-
-    Used before LLM generation.
+    Final context package.
     """
 
     query: str
@@ -363,20 +317,9 @@ class OptimizedContext(BaseModel):
 
 
 
-# ==========================================================
-# Agent context
-# ==========================================================
-
-
 class AgentContext(BaseModel):
     """
-    Final context consumed by agent layer.
-
-    Contains:
-
-    - LLM-ready text
-    - citation sources
-    - optional structured context
+    Final LLM input package.
     """
 
     text: str = ""
@@ -390,58 +333,32 @@ class AgentContext(BaseModel):
 
 
 # ==========================================================
-# Generic pipeline helpers
+# Pipeline helpers
 # ==========================================================
 
 
-class EmbeddingResult(BaseModel):
+class PipelineScore(BaseModel):
     """
-    Generic embedding response contract.
-
-    Used only when raw vectors need transport.
+    Unified score container.
     """
 
-    vector: list[float]
+    keyword: float = 0.0
 
+    quality: float = 0.0
 
+    similarity: float = 0.0
 
-class RerankResult(BaseModel):
-    """
-    Generic reranker result contract.
-    """
+    rerank: float = 0.0
 
-    score: float
+    fusion: float = 0.0
 
-    index: int
-
-
-
-class ChunkScore(BaseModel):
-    """
-    Shared ranking score container.
-    """
-
-    filter_score: float | None = None
-
-    embedding_score: float | None = None
-
-    rerank_score: float | None = None
-
-
-
-# ==========================================================
-# Compatibility helper
-# ==========================================================
 
 
 def model_to_dict(
     model: BaseModel,
 ) -> dict[str, Any]:
     """
-    Unified model serialization.
-
-    Prevents direct dictionary construction
-    across pipeline modules.
+    Unified serialization helper.
     """
 
     return model.model_dump()
