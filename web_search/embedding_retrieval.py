@@ -1,38 +1,13 @@
 """
 Dense embedding similarity retrieval layer.
 
-Pipeline position:
-
-Qdrant Hybrid Retrieval / Filter
-        |
-        v
-FilterChunk
-        |
-        v
-Embedding Similarity
-        |
-        v
-Cloudflare Reranker
-
-
-Responsibilities:
+Module Responsibilities:
 
 - generate query embedding;
 - generate chunk embeddings;
 - calculate cosine similarity;
 - rank filtered chunks;
 - reduce candidate pool before reranking.
-
-
-This module does NOT know about:
-
-- Exa;
-- chunking;
-- filtering logic;
-- reranking;
-- Qdrant storage;
-- compression;
-- LLM.
 """
 
 
