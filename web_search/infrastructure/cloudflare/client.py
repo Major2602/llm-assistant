@@ -1,44 +1,25 @@
 """
-Shared Cloudflare HTTP client.
+Cloudflare HTTP client adapter.
 """
 
 from __future__ import annotations
 
-import httpx
+from web_search.infrastructure.http import (
+    get_http_client,
+)
 
 
-class CloudflareClient:
+def get_cloudflare_client():
+    """
+    Return shared Cloudflare HTTP client.
+    """
 
-    def __init__(
-        self,
-        account_id: str,
-        token: str,
-        timeout: float = 60,
-    ):
-        self.base_url = (
-            "https://api.cloudflare.com/client/v4/accounts/"
-            f"{account_id}/ai/run/"
-        )
-
-        self.client = httpx.AsyncClient(
-            timeout=httpx.Timeout(timeout),
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-            },
-        )
-
-
-    async def post(
-        self,
-        model: str,
-        payload: dict,
-    ) -> dict:
-        response = await self.client.post(
-            self.base_url + model,
-            json=payload,
-        )
-
-        response.raise_for_status()
-
-        return response.json()
+    return get_http_client(
+        name="cloudflare",
+        headers={
+            "Authorization": (
+                f"Bearer {__import__('os').getenv('CF_API_TOKEN')}"
+            ),
+            "Content-Type": "application/json",
+        },
+    )
