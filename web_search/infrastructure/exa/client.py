@@ -1,38 +1,73 @@
 """
-Exa client adapter.
+Exa API client.
+
+Infrastructure layer only.
 """
 
 from __future__ import annotations
 
-import os
 
-from exa_py import AsyncExa
-
-
-_client: AsyncExa | None = None
+from typing import Any
 
 
+from web_search.infrastructure.http import (
+    HttpClient,
+)
 
-def get_exa_client() -> AsyncExa:
+
+class ExaClient:
     """
-    Return singleton Exa client.
+    Low-level Exa HTTP client.
     """
 
-    global _client
 
-    if _client is None:
+    API_URL = (
+        "https://api.exa.ai/search"
+    )
 
-        api_key = os.getenv(
-            "EXA_TOKEN"
+
+    def __init__(
+        self,
+        http: HttpClient,
+        api_key: str,
+    ):
+        self.http = http
+        self.api_key = api_key
+
+
+
+    async def search(
+        self,
+        query: str,
+        limit: int,
+    ) -> list[Any]:
+        """
+        Execute Exa request.
+        """
+
+        response = await self.http.request(
+            "POST",
+            self.API_URL,
+            json={
+                "query": query,
+                "num_results": limit,
+                "contents": {
+                    "text": True,
+                },
+            },
+            headers={
+                "x-api-key": self.api_key,
+            },
         )
 
-        if not api_key:
-            raise RuntimeError(
-                "EXA_TOKEN is missing."
-            )
 
-        _client = AsyncExa(
-            api_key=api_key
+        response.raise_for_status()
+
+
+        payload = response.json()
+
+
+        return (
+            payload.get("results")
+            or []
         )
-
-    return _client
