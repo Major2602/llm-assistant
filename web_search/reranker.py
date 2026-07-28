@@ -30,6 +30,7 @@ from tenacity import (
 )
 
 
+from web_search.config import RERANK_TOP_K
 from web_search.models import (
     EmbeddedChunk,
     RankedChunk,
@@ -56,14 +57,6 @@ REQUEST_TIMEOUT = float(
 RERANK_MODEL = os.getenv(
     "CF_RERANK_MODEL",
     "@cf/baai/bge-reranker-base",
-)
-
-
-DEFAULT_TOP_K = int(
-    os.getenv(
-        "RERANK_TOP_K",
-        "5",
-    )
 )
 
 
@@ -349,7 +342,7 @@ class CloudflareReranker:
 
         chunks: list[EmbeddedChunk],
 
-        top_k: int = DEFAULT_TOP_K,
+        top_k: int = RERANK_TOP_K,
 
     ) -> list[RankedChunk]:
         """
