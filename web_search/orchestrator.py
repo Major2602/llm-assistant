@@ -36,6 +36,10 @@ from web_search.qdrant_store import (
 )
 from web_search.query_normalizer import preprocess_query
 from web_search.reranker import get_reranker
+from web_search.logger import configure_logging
+
+
+configure_logging()
 
 logger = logging.getLogger(__name__)
 
