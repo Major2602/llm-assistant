@@ -629,7 +629,7 @@ def adapt_hybrid_results(
 
             **item.chunk.model_dump(),
 
-            retrieval_score=item.rrf_score,
+            rrf_score=item.rrf_score,
 
         )
 
