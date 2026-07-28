@@ -1,43 +1,121 @@
 """
-Dense vector generation adapter for Qdrant.
+Qdrant vector preparation layer.
+
+Responsibilities:
+
+- generate dense embeddings;
+- generate sparse BM25 vectors;
+- convert text into Qdrant vector format.
+
+No storage logic.
+No singleton dependencies.
 """
 
 from __future__ import annotations
 
-from web_search.domain.models import DenseVector
-from web_search.infrastructure.cloudflare.embeddings import (
-    get_embedding_service,
+
+from fastembed import SparseTextEmbedding
+from qdrant_client.models import SparseVector
+
+
+from web_search.domain.contracts import (
+    Embedder,
 )
 
 
-
-async def generate_dense_vectors(
-    texts: list[str],
-) -> list[DenseVector]:
+class QdrantEmbeddingBuilder:
     """
-    Generate dense embeddings for documents.
-    """
+    Builds vectors required by Qdrant.
 
-    if not texts:
-        return []
-
-    service = get_embedding_service()
-
-    return await service.embed_documents(
-        texts
-    )
-
-
-
-async def generate_query_vector(
-    query: str,
-) -> DenseVector:
-    """
-    Generate query embedding.
+    Dense embeddings are provided through injected Embedder.
+    Sparse embeddings use local BM25 encoder.
     """
 
-    service = get_embedding_service()
 
-    return await service.embed_query(
-        query
-    )
+    def __init__(
+        self,
+        embedder: Embedder,
+        sparse_model_name: str = "Qdrant/bm25",
+    ):
+        self._embedder = embedder
+
+        self._sparse_encoder = SparseTextEmbedding(
+            model_name=sparse_model_name,
+        )
+
+
+    async def dense(
+        self,
+        texts: list[str],
+    ):
+        """
+        Generate dense embeddings.
+        """
+
+        if not texts:
+            return []
+
+        return await self._embedder.embed_documents(
+            texts
+        )
+
+
+    def sparse(
+        self,
+        text: str,
+    ) -> SparseVector:
+        """
+        Generate BM25 sparse vector.
+        """
+
+        vector = next(
+            self._sparse_encoder.embed(
+                [text]
+            )
+        )
+
+
+        return SparseVector(
+            indices=vector.indices.tolist(),
+            values=vector.values.tolist(),
+        )
+
+
+    async def build_batch(
+        self,
+        texts: list[str],
+    ) -> list[tuple[object, SparseVector]]:
+        """
+        Build dense + sparse vectors.
+
+        Returns:
+            [
+                (
+                    dense_vector,
+                    sparse_vector
+                )
+            ]
+        """
+
+        dense_vectors = await self.dense(
+            texts
+        )
+
+
+        result = []
+
+
+        for text, dense in zip(
+            texts,
+            dense_vectors,
+        ):
+
+            result.append(
+                (
+                    dense,
+                    self.sparse(text),
+                )
+            )
+
+
+        return result
