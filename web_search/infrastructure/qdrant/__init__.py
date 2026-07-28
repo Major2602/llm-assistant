@@ -1,3 +1,3 @@
 """
-Qdrant infrastructure service
+Qdrant infrastructure
 """
