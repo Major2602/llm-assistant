@@ -101,6 +101,14 @@ async def _retrieve_from_memory(
         limit=CACHE_TOP_K,
     )
 
+    if cached:
+        semantic = adapt_hybrid_results(cached)
+
+        ranked = await reranker.rerank(
+            query.normalized,
+            semantic
+        )
+
     decision = RetrievalDecision(
         cache_hit=bool(cached),
         results=cached,
