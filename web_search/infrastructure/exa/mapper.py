@@ -1,11 +1,13 @@
 """
-Exa response mapper.
+Exa response mapping.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+
 from uuid import uuid4
+from datetime import datetime, UTC
+
 
 from web_search.domain.models import (
     WebDocument,
@@ -14,40 +16,18 @@ from web_search.domain.models import (
 
 
 
-def _timestamp() -> int:
-    return int(
-        datetime.now(
-            timezone.utc
-        ).timestamp()
-    )
-
-
-
-def _get(
-    obj,
-    field: str,
-    default=None,
-):
-    return getattr(
-        obj,
-        field,
-        default,
-    )
-
-
-
 def map_exa_document(
-    document,
+    document: dict,
 ) -> WebDocument | None:
     """
-    Convert Exa object to domain model.
+    Convert Exa document into domain model.
     """
 
+
     text = (
-        _get(
-            document,
+        document.get(
             "text",
-            "",
+            ""
         )
         or ""
     ).strip()
@@ -57,7 +37,12 @@ def map_exa_document(
         return None
 
 
-    timestamp = _timestamp()
+
+    timestamp = int(
+        datetime.now(
+            UTC
+        ).timestamp()
+    )
 
 
     return WebDocument(
@@ -71,35 +56,28 @@ def map_exa_document(
         source=Source(
 
             title=(
-                _get(
-                    document,
-                    "title",
-                    None,
+                document.get(
+                    "title"
                 )
                 or "Untitled"
             ),
 
             url=(
-                _get(
-                    document,
-                    "url",
-                    None,
+                document.get(
+                    "url"
                 )
                 or ""
             ),
 
             provider="exa",
 
-            author=_get(
-                document,
-                "author",
+            author=document.get(
+                "author"
             ),
 
-            published_date=_get(
-                document,
-                "published_date",
+            published_date=document.get(
+                "published_date"
             ),
-
         ),
 
         created_at=timestamp,
