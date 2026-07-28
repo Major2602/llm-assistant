@@ -1,143 +1,102 @@
-"""
-Pipeline decision policies.
-
-Contains business rules that decide:
-- whether to use memory;
-- whether to fallback to web;
-- whether pipeline should continue;
-- quality thresholds.
-"""
+# web_search/application/policies.py
 
 from __future__ import annotations
 
 
-from web_search.application.state import PipelineState
+from dataclasses import dataclass
 
 
 
-class MemoryPolicy:
-    """
-    Controls cache/memory usage decisions.
-    """
-
-    def should_use_memory(
-        self,
-        state: PipelineState,
-    ) -> bool:
-        """
-        Decide whether cached results are acceptable.
-        """
-
-        return bool(
-            state.cache_hit
-            and state.ranked_chunks
-        )
-
-
-
-    def should_store_memory(
-        self,
-        state: PipelineState,
-    ) -> bool:
-        """
-        Decide whether fresh results should be stored.
-        """
-
-        return bool(
-            state.chunks
-            and not state.cache_hit
-        )
-
-
-
+@dataclass(frozen=True)
 class RetrievalPolicy:
     """
-    Controls retrieval continuation rules.
+    Retrieval stage policies.
+
+    Contains only pipeline decisions.
+    No infrastructure configuration.
     """
 
-    def should_continue_after_documents(
-        self,
-        state: PipelineState,
-    ) -> bool:
-        """
-        Continue only when documents exist.
-        """
+    max_documents: int = 10
 
-        return bool(
-            state.documents
-        )
+    max_chunks: int = 50
+
+    max_filtered_chunks: int = 10
+
+    max_embedded_chunks: int = 20
+
+    max_ranked_chunks: int = 10
 
 
 
-    def should_continue_after_chunks(
-        self,
-        state: PipelineState,
-    ) -> bool:
-        """
-        Continue only when chunks exist.
-        """
-
-        return bool(
-            state.chunks
-        )
-
-
-
-    def should_continue_after_ranking(
-        self,
-        state: PipelineState,
-    ) -> bool:
-        """
-        Continue only with ranked results.
-        """
-
-        return bool(
-            state.ranked_chunks
-        )
-
-
-
-class ContextPolicy:
+@dataclass(frozen=True)
+class CachePolicy:
     """
-    Controls final context generation.
+    Memory/cache behavior policy.
     """
 
-    def should_build_context(
-        self,
-        state: PipelineState,
-    ) -> bool:
-        """
-        Context requires compressed chunks.
-        """
+    enabled: bool = True
 
-        return bool(
-            state.compressed_chunks
-        )
+    cleanup_days: int = 30
 
 
 
+@dataclass(frozen=True)
+class QualityPolicy:
+    """
+    Content quality thresholds.
+
+    Previous filter constants are moved here.
+    """
+
+    min_text_length: int = 200
+
+    min_words: int = 40
+
+    min_score: float = 0.30
+
+
+
+@dataclass(frozen=True)
+class CompressionPolicy:
+    """
+    Context compression policy.
+    """
+
+    max_context_chunks: int = 10
+
+
+
+@dataclass(frozen=True)
 class PipelinePolicy:
     """
     Aggregated pipeline rules.
+
+    Application layer depends on this object.
     """
 
-    def __init__(
-        self,
-        memory: MemoryPolicy | None = None,
-        retrieval: RetrievalPolicy | None = None,
-        context: ContextPolicy | None = None,
-    ):
-        self.memory = (
-            memory
-            or MemoryPolicy()
-        )
+    retrieval: RetrievalPolicy
 
-        self.retrieval = (
-            retrieval
-            or RetrievalPolicy()
-        )
+    cache: CachePolicy
 
-        self.context = (
-            context
-            or ContextPolicy()
-        )
+    quality: QualityPolicy
+
+    compression: CompressionPolicy
+
+
+
+def default_pipeline_policy() -> PipelinePolicy:
+    """
+    Default production pipeline policy.
+    """
+
+    return PipelinePolicy(
+
+        retrieval=RetrievalPolicy(),
+
+        cache=CachePolicy(),
+
+        quality=QualityPolicy(),
+
+        compression=CompressionPolicy(),
+
+    )
