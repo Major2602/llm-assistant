@@ -12,6 +12,10 @@ from dataclasses import dataclass
 class WebSearchConfig:
     """Runtime configuration for web search pipeline."""
 
+    # Exa
+    exa_api_key: str=""
+    exa_results: int = 100
+    
     cache_top_k: int = 10
     embedding_top_k: int = 8
     rerank_top_k: int = 5
@@ -49,18 +53,32 @@ def load_config() -> WebSearchConfig:
     """
 
     return WebSearchConfig(
+
+        exa_api_key=os.getenv(
+            "EXA_TOKEN",
+            "",
+        ),
+
+        exa_results = _get_int_env(
+            "EXA_RESULTS",
+            100,
+        )
+        
         cache_top_k=_get_int_env(
             "CACHE_TOP_K",
             10,
         ),
+        
         embedding_top_k=_get_int_env(
             "EMBEDDING_TOP_K",
             8,
         ),
+        
         rerank_top_k=_get_int_env(
             "RERANK_TOP_K",
             5,
         ),
+        
         cleanup_days=_get_int_env(
             "CLEANUP_DAYS",
             30,
