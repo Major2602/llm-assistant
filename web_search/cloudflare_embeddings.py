@@ -543,7 +543,7 @@ class CloudflareEmbeddings:
 
 
 
-        result: list[list[float]] = []
+        result: list[DenseVector] = []
 
 
 
