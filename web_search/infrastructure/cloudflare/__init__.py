@@ -1,3 +1,0 @@
-"""
-Cloudflare Workers AI infrastructure.
-"""
