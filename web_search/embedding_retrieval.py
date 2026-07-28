@@ -21,6 +21,7 @@ import os
 import numpy as np
 
 
+from web_search.config import EMBEDDING_TOP_K
 from web_search.cloudflare_embeddings import (
     get_embedding_model,
 )
@@ -34,20 +35,6 @@ from web_search.models import (
 
 
 logger = logging.getLogger(__name__)
-
-
-
-# ==========================================================
-# Configuration
-# ==========================================================
-
-
-EMBEDDING_TOP_K = int(
-    os.getenv(
-        "EMBEDDING_TOP_K",
-        "8",
-    )
-)
 
 
 
