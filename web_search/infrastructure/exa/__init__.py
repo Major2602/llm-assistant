@@ -1,3 +1,3 @@
 """
-Exa infrastructure implementation.
+Exa infrastructure.
 """
