@@ -16,6 +16,8 @@ from web_search.filter import filter_chunks
 from web_search.models import (
     AgentContext,
     DocumentChunk,
+    EmbeddedChunk,
+    HybridRetrievalResult,
     NormalizedQuery,
     PipelineMetadata,
     RankedChunk,
@@ -139,20 +141,13 @@ async def _retrieve_from_memory(
         limit=CACHE_TOP_K,
     )
 
-    if cached:
-        semantic = adapt_hybrid_results(cached)
-
-        ranked = await reranker.rerank(
-            query.normalized,
-            semantic
-        )
-
-    decision = RetrievalDecision(
+    desision = RetrievalDecision(
         cache_hit=bool(cached),
-        results=cached,
+        results=cached
     )
 
     if not cached:
+        
         return decision, []
 
     logger.info(
@@ -160,14 +155,15 @@ async def _retrieve_from_memory(
         len(cached),
     )
 
+    semantic_chunks = adapt_hybrid_results(
+        cached
+    )
+    
     reranker = get_reranker()
 
     ranked = await reranker.rerank(
         query=query.normalized,
-        chunks=[
-            result.chunk.model_copy()
-            for result in cached
-        ],
+        chunks=semantic_chunks,
         top_k=RERANK_TOP_K,
     )
 
