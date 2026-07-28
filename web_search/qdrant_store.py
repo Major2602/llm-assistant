@@ -602,6 +602,43 @@ async def hybrid_search(
 
 
 # ==========================================================
+# Qdrant result adaptation
+# ==========================================================
+
+
+def adapt_hybrid_results(
+    results: list[HybridRetrievalResult],
+) -> list[EmbeddedChunk]:
+    """
+    Adapt Qdrant memory results for reranker pipeline.
+
+    Qdrant does not contain:
+    - keyword_score
+    - quality_score
+    - length_score
+    - filter_score
+    - similarity_score
+
+    These fields belong only to fresh retrieval pipeline.
+    """
+
+    return [
+
+        EmbeddedChunk(
+
+            **item.chunk.model_dump(),
+
+            retrieval_score=item.rrf_score,
+
+        )
+
+        for item in results
+
+    ]
+
+
+
+# ==========================================================
 # Memory lifecycle
 # ==========================================================
 
