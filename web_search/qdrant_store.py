@@ -40,7 +40,7 @@ from qdrant_client.models import (
 
 from fastembed import SparseTextEmbedding
 
-
+from web_search.config import CACHE_TOP_K
 from web_search.cloudflare_embeddings import (
     get_embedding_model,
 )
@@ -86,15 +86,6 @@ COLLECTION_NAME = os.getenv(
 DENSE_NAME = "dense"
 
 SPARSE_NAME = "bm25"
-
-
-
-TOP_K = int(
-    os.getenv(
-        "QDRANT_TOP_K",
-        "10",
-    )
-)
 
 
 
@@ -476,7 +467,7 @@ async def store_chunks(
 
 async def hybrid_search(
     query: NormalizedQuery,
-    limit: int = TOP_K,
+    limit: int = CACHE_TOP_K,
 ) -> list[HybridRetrievalResult]:
     """
     Dense + BM25 hybrid retrieval.
