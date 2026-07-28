@@ -1,36 +1,134 @@
-"""
-Web search domain exceptions.
+# web_search/domain/exceptions.py
 
-Business-level exceptions only.
-No infrastructure dependencies.
-"""
+from __future__ import annotations
+
+
+
+# ==========================================================
+# Base exceptions
+# ==========================================================
 
 
 class WebSearchError(Exception):
     """
-    Base exception for web search domain.
+    Base domain exception.
     """
 
 
-class InvalidQueryError(WebSearchError):
+
+# ==========================================================
+# Validation errors
+# ==========================================================
+
+
+class ValidationError(
+    WebSearchError
+):
     """
-    Raised when user query is invalid.
+    Invalid input data.
     """
 
 
-class RetrievalError(WebSearchError):
+
+class InvalidQueryError(
+    ValidationError
+):
     """
-    Raised when retrieval pipeline fails.
+    Query validation failed.
     """
 
 
-class ProcessingError(WebSearchError):
+
+# ==========================================================
+# Provider errors
+# ==========================================================
+
+
+class ProviderError(
+    WebSearchError
+):
     """
-    Raised during document/chunk processing.
+    External provider failure.
     """
 
 
-class ContextBuildError(WebSearchError):
+
+class ProviderUnavailableError(
+    ProviderError
+):
     """
-    Raised when final context preparation fails.
+    Temporary provider outage.
     """
+
+
+
+class InvalidProviderResponseError(
+    ProviderError
+):
+    """
+    Provider returned invalid data.
+    """
+
+
+
+# ==========================================================
+# Storage errors
+# ==========================================================
+
+
+class StorageError(
+    WebSearchError
+):
+    """
+    Vector storage failure.
+    """
+
+
+
+class StorageUnavailableError(
+    StorageError
+):
+    """
+    Temporary storage unavailable.
+    """
+
+
+
+# ==========================================================
+# Pipeline errors
+# ==========================================================
+
+
+class PipelineError(
+    WebSearchError
+):
+    """
+    Pipeline execution error.
+    """
+
+
+
+class StageExecutionError(
+    PipelineError
+):
+    """
+    Pipeline stage failed.
+    """
+
+
+
+# ==========================================================
+# Retry classification
+# ==========================================================
+
+
+TRANSIENT_ERRORS = (
+    ProviderUnavailableError,
+    StorageUnavailableError,
+)
+
+
+PERMANENT_ERRORS = (
+    ValidationError,
+    InvalidProviderResponseError,
+)
