@@ -263,6 +263,8 @@ class AgentContext(BaseModel):
 
     optimized_context: OptimizedContext | None = None
 
+    metadata = PipelineMetadata | None = None
+
 
 
 # ==========================================================
@@ -300,3 +302,25 @@ class PipelineMetadata(BaseModel):
     request_id: str | None = None
 
     created_at: int | None = None
+
+    query: str | None = None
+
+    cache_hit: bool = False
+
+    documents_found: int = 0
+
+    chunks_created: int = 0
+
+    chunks_filtered: int = 0
+
+    chunks_embedded: int = 0
+
+    chunks_ranked: int = 0
+
+    chunks_compressed: int = 0
+
+    sources_count: int = 0
+
+    pipeline_errors: list[str] = Field(
+        default_factory=list
+    )
