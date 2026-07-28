@@ -4,106 +4,120 @@ Cloudflare reranker provider.
 
 from __future__ import annotations
 
-import logging
+
+from web_search.infrastructure.http import (
+    HttpClient,
+)
+
 
 from web_search.domain.contracts import (
-    RerankerProvider,
+    Reranker,
 )
+
 
 from web_search.domain.models import (
-    EmbeddedChunk,
     RankedChunk,
+    EmbeddedChunk,
 )
 
-from web_search.infrastructure.cloudflare.client import (
-    CloudflareClient,
-)
-
-
-logger = logging.getLogger(__name__)
 
 
 class CloudflareRerankerProvider(
-    RerankerProvider
+    Reranker
 ):
+    """
+    BGE reranker implementation.
+    """
 
     def __init__(
         self,
-        client: CloudflareClient,
+        http: HttpClient,
+        account_id: str,
+        token: str,
         model: str,
-        top_k: int = 5,
     ):
-        self.client = client
-        self.model = model
-        self.top_k = top_k
 
+        self.http = http
 
-    def _parse_scores(
-        self,
-        payload: dict,
-    ) -> list[float]:
-
-        data = (
-            payload
-            .get("result", {})
-            .get("scores")
-            or []
+        self.url = (
+            "https://api.cloudflare.com/client/v4/"
+            f"accounts/{account_id}/ai/run/{model}"
         )
 
-        return [
-            float(
-                item.get("score")
-                if isinstance(item, dict)
-                else item
-            )
-            for item in data
-        ]
+        self.token = token
+
 
 
     async def rerank(
         self,
         query: str,
         chunks: list[EmbeddedChunk],
+        top_k: int,
     ) -> list[RankedChunk]:
 
         if not chunks:
+
             return []
 
 
-        payload = await self.client.post(
-            self.model,
-            {
+        response = await self.http.request(
+            "POST",
+            self.url,
+            json={
                 "query": query,
                 "contexts": [
                     chunk.text
                     for chunk in chunks
                 ],
             },
+            headers={
+                "Authorization":
+                    f"Bearer {self.token}",
+            },
         )
 
 
-        scores = self._parse_scores(
+        response.raise_for_status()
+
+
+        payload = response.json()
+
+
+        scores = (
             payload
+            .get("result", {})
+            .get("scores", [])
         )
 
 
-        ranked = [
+        ranked = []
 
-            RankedChunk(
-                **chunk.model_dump(),
-                rerank_score=score,
+
+        for chunk, score in zip(
+            chunks,
+            scores,
+        ):
+
+            ranked.append(
+
+                RankedChunk(
+
+                    **chunk.model_dump(),
+
+                    rerank_score=float(
+                        score
+                    ),
+
+                )
+
             )
-
-            for chunk, score
-            in zip(chunks, scores)
-
-        ]
 
 
         ranked.sort(
-            key=lambda x: x.rerank_score,
+            key=lambda item:
+                item.rerank_score,
             reverse=True,
         )
 
 
-        return ranked[:self.top_k]
+        return ranked[:top_k]
