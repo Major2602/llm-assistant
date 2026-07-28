@@ -301,7 +301,7 @@ class AgentContext(BaseModel):
 
     optimized_context: OptimizedContext | None = None
 
-    metadata = PipelineMetadata | None = None
+    metadata: PipelineMetadata | None = None
 
 
 
