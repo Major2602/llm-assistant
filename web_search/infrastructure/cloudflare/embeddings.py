@@ -1,137 +1,125 @@
 """
 Cloudflare embeddings provider.
+
+Infrastructure implementation.
 """
 
 from __future__ import annotations
 
-import logging
 
-from tenacity import (
-    retry,
-    stop_after_attempt,
-    wait_exponential,
-    retry_if_exception_type,
+from typing import Any
+
+
+from web_search.infrastructure.http import (
+    HttpClient,
 )
 
-import httpx
 
 from web_search.domain.contracts import (
-    EmbeddingProvider,
+    Embedder,
 )
+
 
 from web_search.domain.models import (
     DenseVector,
 )
 
-from web_search.infrastructure.cloudflare.client import (
-    CloudflareClient,
-)
-
-
-logger = logging.getLogger(__name__)
 
 
 class CloudflareEmbeddingProvider(
-    EmbeddingProvider
+    Embedder
 ):
+    """
+    Cloudflare Workers AI embeddings.
+    """
+
 
     def __init__(
         self,
-        client: CloudflareClient,
+        http: HttpClient,
+        account_id: str,
+        token: str,
         model: str,
-        dimension: int = 1024,
     ):
-        self.client = client
-        self.model = model
-        self.dimension = dimension
+        self.http = http
 
-
-    def _parse(
-        self,
-        payload: dict,
-    ) -> list[list[float]]:
-
-        data = (
-            payload
-            .get("result", {})
-            .get("data", [])
+        self.url = (
+            "https://api.cloudflare.com/client/v4/"
+            f"accounts/{account_id}/ai/run/{model}"
         )
 
-        vectors = []
+        self.token = token
 
-        for item in data:
-
-            vector = (
-                item.get("embedding")
-                if isinstance(item, dict)
-                else item
-            )
-
-            if vector:
-                vectors.append(
-                    [
-                        float(x)
-                        for x in vector
-                    ]
-                )
-
-        return vectors
-
-
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(
-            min=1,
-            max=8,
-        ),
-        retry=retry_if_exception_type(
-            httpx.HTTPError
-        ),
-    )
-    async def _request(
-        self,
-        texts: list[str],
-    ) -> list[DenseVector]:
-
-        payload = await self.client.post(
-            self.model,
-            {
-                "text": texts
-            },
-        )
-
-        vectors = self._parse(
-            payload
-        )
-
-        return [
-            DenseVector(
-                values=v
-            )
-            for v in vectors
-        ]
 
 
     async def embed_documents(
         self,
         texts: list[str],
     ) -> list[DenseVector]:
+        """
+        Generate document embeddings.
+        """
 
         if not texts:
             return []
 
-        return await self._request(
-            texts
+
+        response = await self.http.request(
+            "POST",
+            self.url,
+            json={
+                "text": texts,
+            },
+            headers={
+                "Authorization":
+                    f"Bearer {self.token}",
+            },
         )
+
+
+        response.raise_for_status()
+
+
+        payload = response.json()
+
+
+        vectors = (
+            payload
+            .get("result", {})
+            .get("data", [])
+        )
+
+
+        return [
+
+            DenseVector(
+                values=item
+            )
+
+            for item in vectors
+
+        ]
+
 
 
     async def embed_query(
         self,
         query: str,
     ) -> DenseVector:
+        """
+        Generate query embedding.
+        """
 
-        result = await self._request(
+        result = await self.embed_documents(
             [query]
         )
+
+
+        if not result:
+
+            raise RuntimeError(
+                "Embedding response is empty."
+            )
+
 
         return result[0]
