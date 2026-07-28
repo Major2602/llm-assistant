@@ -16,6 +16,12 @@ from web_search.context_optimizer import optimize_context
 from web_search.embedding_retrieval import retrieve_by_embedding_similarity
 from web_search.exa import search_exa
 from web_search.filter import filter_chunks
+from web_search.config import (
+    CACHE_TOP_K,
+    EMBEDDING_TOP_K,
+    RERANK_TOP_K,
+    CLEANUP_DAYS
+)
 from web_search.models import (
     AgentContext,
     DocumentChunk,
@@ -36,18 +42,6 @@ from web_search.reranker import get_reranker
 
 logger = logging.getLogger(__name__)
 
-
-# ==========================================================
-# Configuration
-# ==========================================================
-
-CACHE_TOP_K = 10
-
-EMBEDDING_TOP_K = 8
-
-RERANK_TOP_K = 5
-
-CLEANUP_DAYS = 30
 
 
 # ==========================================================
