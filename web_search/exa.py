@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import logging
 import os
-import uuid
 
 from uuid import uuid4
 from datetime import datetime, timezone
