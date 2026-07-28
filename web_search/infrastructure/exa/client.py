@@ -1,50 +1,38 @@
 """
-Exa API client.
+Exa client adapter.
 """
 
 from __future__ import annotations
 
-import logging
+import os
 
 from exa_py import AsyncExa
 
 
-logger = logging.getLogger(__name__)
+_client: AsyncExa | None = None
 
 
-class ExaClient:
+
+def get_exa_client() -> AsyncExa:
     """
-    Async Exa API wrapper.
+    Return singleton Exa client.
     """
 
-    def __init__(
-        self,
-        api_key: str,
-    ):
-        self._client = AsyncExa(
+    global _client
+
+    if _client is None:
+
+        api_key = os.getenv(
+            "EXA_TOKEN"
+        )
+
+        if not api_key:
+            raise RuntimeError(
+                "EXA_TOKEN is missing."
+            )
+
+        _client = AsyncExa(
             api_key=api_key
         )
 
-
-    async def search(
-        self,
-        query: str,
-        limit: int,
-    ) -> list:
-        """
-        Execute Exa search.
-        """
-
-        logger.info(
-            "Exa search query=%s",
-            query,
-        )
-
-        response = await self._client.search_and_contents(
-            query=query,
-            num_results=limit,
-            text=True,
-            type="auto",
-        )
-
-        return response.results
+    return _client
