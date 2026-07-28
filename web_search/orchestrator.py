@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 
 from datetime import datetime, UTC
 
@@ -191,20 +192,20 @@ async def _retrieve_from_web(
     if not documents:
         return [], []
 
-    chunks = chunk_documents(
+    all_chunks = chunk_documents(
         documents,
     )
 
-    if not chunks:
+    if not all_chunks:
         return [], []
 
     filtered = filter_chunks(
-        chunks=chunks,
+        chunks=all_chunks,
         query=query.normalized,
     )
 
     if not filtered:
-        return [], chunks
+        return [], all_chunks
 
     embedded = await retrieve_by_embedding_similarity(
         query=query.normalized,
@@ -213,7 +214,7 @@ async def _retrieve_from_web(
     )
 
     if not embedded:
-        return [], chunks
+        return [], all_chunks
 
     reranker = get_reranker()
 
@@ -223,7 +224,7 @@ async def _retrieve_from_web(
         top_k=RERANK_TOP_K,
     )
 
-    return ranked, chunks
+    return ranked, all_chunks
 
 
 # ==========================================================
@@ -261,6 +262,7 @@ async def get_context(
     await init_web_search()
 
     metadata = PipelineMetadata(
+        request_id=str(uuid.uuid4()),
         query=query,
         created_at=int(datetime.now(UTC).timestamp())
     )
@@ -277,6 +279,8 @@ async def get_context(
         normalized_query,
     )
 
+    metadata.cache_hit = decision.cache_hit
+
     if not decision.cache_hit:
 
         logger.info(
@@ -286,6 +290,9 @@ async def get_context(
         ranked, chunks = await _retrieve_from_web(
             normalized_query,
         )
+
+        metadata.chunks_created = len(chunks)
+        metadata.chunks_ranked = len(ranked)
 
         await _store_memory(
             chunks,
@@ -304,6 +311,8 @@ async def get_context(
         chunks=ranked,
     )
 
+    metadata.chunks_compressed = len(compressed)
+
     if not compressed:
         return AgentContext()
 
@@ -312,9 +321,14 @@ async def get_context(
         chunks=compressed,
     )
 
+    metadata.sources_count = len(context.sources)
+
     logger.info(
         "Context ready sources=%d",
         len(context.sources),
     )
 
-    return context
+    return AgentContext(
+        **context.model_dump(),
+        metadata=metadata
+    )
