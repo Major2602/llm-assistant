@@ -48,6 +48,7 @@ from web_search.cloudflare_embeddings import (
 
 from web_search.models import (
     DocumentChunk,
+    EmbeddedChunk,
     HybridRetrievalResult,
     NormalizedQuery,
     DenseVector
