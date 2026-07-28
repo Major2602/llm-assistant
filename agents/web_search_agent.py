@@ -1,40 +1,55 @@
 """
 Web search agent.
 
-Responsibilities:
+Responsibilities
+----------------
 - configure LangChain agent;
 - expose web_search tool;
-- bridge AgentContext to the LLM.
+- bridge retrieval pipeline to LLM;
+- expose structured response for UI.
 
-The agent intentionally knows nothing about:
-
-- Exa
-- Qdrant
-- Hybrid Retrieval
-- Embeddings
-- Compression
-- Context Optimization
-
-All retrieval logic lives inside web_search.context.
+The agent intentionally knows nothing about
+retrieval internals.
 """
 
 from __future__ import annotations
 
 import logging
 import threading
+
 from typing import Any
 
 from langchain.agents import create_agent
 from langchain.tools import tool
 
 from llm import get_llm
-from web_search.context import get_context
+from web_search.orchestrator import get_context
+from web_search.models import PipelineMetadata, Source
 
 logger = logging.getLogger(__name__)
 
 
 # ==========================================================
-# Web Search Tool
+# UI Contract
+# ==========================================================
+
+
+class AgentResponse(dict):
+    """
+    Final response returned to UI.
+
+    {
+        "answer": "...",
+        "sources": [...],
+        "metadata": {...}
+    }
+    """
+
+    pass
+
+
+# ==========================================================
+# Tool
 # ==========================================================
 
 
@@ -43,15 +58,13 @@ async def web_search(
     query: str,
 ) -> tuple[str, dict[str, Any]]:
     """
-    Retrieve optimized external context.
+    Retrieve optimized context.
 
-    Returns:
+    content:
+        text injected into LLM context
 
-        content:
-            Optimized context prepared for LLM.
-
-        artifact:
-            Source metadata used by UI.
+    artifact:
+        metadata preserved for UI
     """
 
     logger.info(
@@ -61,18 +74,29 @@ async def web_search(
 
     context = await get_context(query)
 
+    tokens = (
+        context.optimized_context.total_tokens
+        if context.optimized_context
+        else 0
+    )
+
+    logger.info(
+        "Context ready. sources=%d tokens=%d",
+        len(context.sources),
+        tokens,
+    )
+
     artifact = {
         "sources": [
             source.model_dump()
             for source in context.sources
         ],
+        "metadata": (
+            context.metadata.model_dump()
+            if context.metadata
+            else None
+        ),
     }
-
-    logger.info(
-        "Context ready. sources=%d tokens=%d",
-        len(context.sources),
-        context.token_count,
-    )
 
     return (
         context.text,
@@ -81,67 +105,40 @@ async def web_search(
 
 
 # ==========================================================
-# Agent Singleton
+# Agent
 # ==========================================================
-
-
-_agent: Any | None = None
-
-_agent_lock = threading.Lock()
 
 
 SYSTEM_PROMPT = """
 You are an advanced AI assistant.
 
-You have access to a retrieval tool that provides
-optimized external knowledge.
+You have access to an external retrieval tool.
 
-When answering:
+Instructions:
 
-• Use retrieved context whenever available.
-• Prefer retrieved facts over prior knowledge.
-• Never invent unsupported information.
-• If the retrieved context is insufficient,
-  explicitly state the uncertainty.
-
-When sources are available:
-
-• Base the answer only on supported facts.
-• Do not fabricate citations.
-• Preserve factual consistency.
-
-Never mention internal implementation details.
-
-Never mention:
-
-- Exa
-- Qdrant
-- BM25
-- embeddings
-- reranking
-- semantic cache
-- compression
-- retrieval pipeline
-
-unless the user explicitly asks.
-
-Always answer in the user's language.
-
-Produce concise, accurate and well-structured answers.
+- Prefer retrieved information whenever available.
+- Never invent unsupported facts.
+- If retrieved information is insufficient, say so.
+- Never fabricate citations.
+- Never mention internal implementation details.
+- Always answer in the user's language.
+- Produce concise, accurate, well-structured responses.
 """
 
 
+_agent: Any | None = None
+
+_lock = threading.Lock()
+
+
 def get_agent() -> Any:
-    """
-    Return singleton LangChain agent.
-    """
 
     global _agent
 
     if _agent is not None:
         return _agent
 
-    with _agent_lock:
+    with _lock:
 
         if _agent is not None:
             return _agent
@@ -152,9 +149,7 @@ def get_agent() -> Any:
 
         _agent = create_agent(
             model=get_llm(),
-            tools=[
-                web_search,
-            ],
+            tools=[web_search],
             system_prompt=SYSTEM_PROMPT,
         )
 
@@ -172,18 +167,24 @@ def get_agent() -> Any:
 
 async def ask_agent(
     text: str,
-) -> str:
+) -> AgentResponse:
     """
-    Execute agent without streaming.
+    Execute agent.
+
+    Returns
+
+    {
+        answer,
+        sources,
+        metadata,
+    }
     """
 
     logger.info(
         "Agent request received."
     )
 
-    agent = get_agent()
-
-    result = await agent.ainvoke(
+    result = await get_agent().ainvoke(
         {
             "messages": [
                 {
@@ -194,10 +195,7 @@ async def ask_agent(
         }
     )
 
-    if not isinstance(
-        result,
-        dict,
-    ):
+    if not isinstance(result, dict):
         raise RuntimeError(
             "Unexpected agent response."
         )
@@ -212,16 +210,48 @@ async def ask_agent(
             "Agent returned no messages."
         )
 
-    content = messages[-1].content
+    answer = ""
 
-    response = (
-        content
-        if isinstance(content, str)
-        else str(content)
-    )
+    sources: list[dict[str, Any]] = []
+
+    metadata: dict[str, Any] | None = None
+
+    for message in messages:
+
+        content = getattr(
+            message,
+            "content",
+            None,
+        )
+
+        if isinstance(content, str):
+            answer = content
+
+        artifact = getattr(
+            message,
+            "artifact",
+            None,
+        )
+
+        if not artifact:
+            continue
+
+        sources = artifact.get(
+            "sources",
+            sources,
+        )
+
+        metadata = artifact.get(
+            "metadata",
+            metadata,
+        )
 
     logger.info(
-        "Agent response generated successfully."
+        "Agent response generated."
     )
 
-    return response
+    return AgentResponse(
+        answer=answer,
+        sources=sources,
+        metadata=metadata,
+    )
