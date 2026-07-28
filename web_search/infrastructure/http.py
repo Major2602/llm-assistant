@@ -1,89 +1,170 @@
 """
-Shared HTTP infrastructure.
+Shared HTTP infrastructure layer.
 
 Responsibilities:
-- provide reusable async HTTP clients;
-- centralize timeout configuration;
-- manage client lifecycle.
+
+- unified async HTTP client;
+- timeout management;
+- retry policy;
+- common headers;
+- transport-level errors.
+
+No business logic here.
 """
 
 from __future__ import annotations
 
+
+import asyncio
 import logging
-import os
+
+from dataclasses import dataclass, field
+from typing import Any
+
 
 import httpx
+
+
+from web_search.domain.exceptions import (
+    TransientError,
+    ProviderUnavailable,
+)
 
 
 logger = logging.getLogger(__name__)
 
 
-DEFAULT_TIMEOUT = float(
-    os.getenv(
-        "HTTP_TIMEOUT",
-        "60",
-    )
-)
+# ==========================================================
+# Configuration
+# ==========================================================
 
 
-_clients: dict[str, httpx.AsyncClient] = {}
-
-
-
-def get_http_client(
-    name: str = "default",
-    *,
-    timeout: float | None = None,
-    headers: dict[str, str] | None = None,
-) -> httpx.AsyncClient:
+@dataclass(frozen=True)
+class HttpSettings:
     """
-    Return named singleton HTTP client.
+    HTTP client configuration.
     """
 
-    if name in _clients:
-        return _clients[name]
+    timeout: float = 30.0
 
+    retries: int = 3
 
-    logger.info(
-        "Creating HTTP client=%s",
-        name,
+    retry_delay: float = 1.0
+
+    headers: dict[str, str] = field(
+        default_factory=dict
     )
 
 
-    client = httpx.AsyncClient(
-
-        timeout=httpx.Timeout(
-            timeout
-            or DEFAULT_TIMEOUT
-        ),
-
-        headers=headers,
-
-        follow_redirects=True,
-
-    )
+# ==========================================================
+# Client
+# ==========================================================
 
 
-    _clients[name] = client
-
-
-    return client
-
-
-
-async def close_http_clients() -> None:
+class HttpClient:
     """
-    Close all HTTP clients.
+    Shared async HTTP client.
+
+    Created by application bootstrap
+    and injected into providers.
     """
 
-    for name, client in _clients.items():
+    def __init__(
+        self,
+        settings: HttpSettings,
+    ):
+        self.settings = settings
 
-        logger.info(
-            "Closing HTTP client=%s",
-            name,
+        self._client = httpx.AsyncClient(
+            timeout=httpx.Timeout(
+                settings.timeout
+            ),
+            headers=settings.headers,
         )
 
-        await client.aclose()
+
+    async def close(self) -> None:
+        """
+        Close HTTP resources.
+        """
+
+        await self._client.aclose()
 
 
-    _clients.clear()
+
+    async def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        json: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        """
+        Execute HTTP request with retry.
+        """
+
+        last_error: Exception | None = None
+
+
+        for attempt in range(
+            self.settings.retries + 1
+        ):
+
+            try:
+
+                response = await self._client.request(
+                    method,
+                    url,
+                    json=json,
+                    headers=headers,
+                )
+
+
+                if response.status_code >= 500:
+
+                    raise TransientError(
+                        f"Server error {response.status_code}"
+                    )
+
+
+                return response
+
+
+            except (
+                httpx.TimeoutException,
+                httpx.NetworkError,
+                TransientError,
+            ) as error:
+
+                last_error = error
+
+
+                if attempt >= self.settings.retries:
+
+                    break
+
+
+                delay = (
+                    self.settings.retry_delay
+                    *
+                    (attempt + 1)
+                )
+
+
+                logger.warning(
+                    "HTTP retry attempt=%d delay=%s error=%s",
+                    attempt + 1,
+                    delay,
+                    error,
+                )
+
+
+                await asyncio.sleep(
+                    delay
+                )
+
+
+        raise ProviderUnavailable(
+            "HTTP request failed"
+        ) from last_error
