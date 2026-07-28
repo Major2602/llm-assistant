@@ -1,132 +1,168 @@
-"""
-Web search domain contracts.
-
-Abstract interfaces between pipeline layers.
-"""
+# web_search/domain/contracts.py
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
+
+from typing import Protocol, Sequence
+
 
 from web_search.domain.models import (
-    AgentContext,
-    DocumentChunk,
-    WebDocument,
-    DenseVector,
     NormalizedQuery,
+    WebDocument,
+    DocumentChunk,
+    DenseVector,
     EmbeddedChunk,
     RankedChunk,
+    HybridRetrievalResult,
+    Source,
 )
 
 
+
 # ==========================================================
-# Retrieval contracts
+# Search provider
 # ==========================================================
 
 
-class DocumentRetriever(ABC):
-    """External document retrieval contract."""
+class SearchProvider(Protocol):
+    """
+    External search provider contract.
+    """
 
-    @abstractmethod
-    async def retrieve(
-        self,
-        query: NormalizedQuery,
-    ) -> list[WebDocument]:
-        """
-        Retrieve external documents.
-        """
-        raise NotImplementedError
-
-
-
-class MemoryStore(ABC):
-    """Semantic memory storage contract."""
-
-    @abstractmethod
     async def search(
         self,
         query: NormalizedQuery,
-    ):
-        """
-        Retrieve cached chunks.
-        """
-        raise NotImplementedError
-
-
-    @abstractmethod
-    async def store(
-        self,
-        chunks: list[DocumentChunk],
-    ) -> None:
-        """
-        Persist chunks.
-        """
-        raise NotImplementedError
+    ) -> list[WebDocument]:
+        ...
 
 
 
 # ==========================================================
-# AI service contracts
+# Embeddings
 # ==========================================================
 
 
-class EmbeddingProvider(ABC):
-    """Embedding generation contract."""
+class Embedder(Protocol):
+    """
+    Embedding service contract.
+    """
 
-    @abstractmethod
     async def embed_documents(
         self,
-        texts: list[str],
+        texts: Sequence[str],
     ) -> list[DenseVector]:
-        """
-        Generate document embeddings.
-        """
-        raise NotImplementedError
+        ...
 
 
-    @abstractmethod
     async def embed_query(
         self,
         query: str,
     ) -> DenseVector:
-        """
-        Generate query embedding.
-        """
-        raise NotImplementedError
+        ...
 
 
 
-class RerankerProvider(ABC):
-    """Chunk reranking contract."""
+# ==========================================================
+# Reranker
+# ==========================================================
 
-    @abstractmethod
+
+class Reranker(Protocol):
+    """
+    Semantic reranking contract.
+    """
+
     async def rerank(
         self,
-        query: str,
+        query: NormalizedQuery,
         chunks: list[EmbeddedChunk],
     ) -> list[RankedChunk]:
-        """
-        Rank retrieval candidates.
-        """
-        raise NotImplementedError
+        ...
 
 
 
 # ==========================================================
-# Pipeline contracts
+# Vector storage
 # ==========================================================
 
 
-class ContextBuilder(ABC):
-    """Final context preparation contract."""
+class VectorStore(Protocol):
+    """
+    Vector memory contract.
+    """
 
-    @abstractmethod
-    def build(
+    async def store(
         self,
-        query: str,
-        chunks: list[RankedChunk],
-    ) -> AgentContext:
-        """
-        Build final agent context.
-        """
-        raise NotImplementedError
+        chunks: list[DocumentChunk],
+    ) -> None:
+        ...
+
+
+    async def search(
+        self,
+        query: NormalizedQuery,
+    ) -> list[HybridRetrievalResult]:
+        ...
+
+
+    async def cleanup(
+        self,
+        days: int,
+    ) -> None:
+        ...
+
+
+
+# ==========================================================
+# HTTP client
+# ==========================================================
+
+
+class HttpClient(Protocol):
+    """
+    Shared HTTP transport contract.
+    """
+
+    async def request(
+        self,
+        method: str,
+        url: str,
+        **kwargs,
+    ) -> dict:
+        ...
+
+
+
+# ==========================================================
+# Pipeline stages
+# ==========================================================
+
+
+class PipelineStage(Protocol):
+    """
+    Common pipeline stage contract.
+    """
+
+    async def execute(
+        self,
+        state,
+    ):
+        ...
+
+
+
+# ==========================================================
+# Source factory
+# ==========================================================
+
+
+class SourceResolver(Protocol):
+    """
+    Source metadata resolver.
+    """
+
+    def resolve(
+        self,
+        data,
+    ) -> Source:
+        ...
