@@ -1,56 +1,87 @@
 """
 Qdrant client infrastructure layer.
+
+Responsibilities:
+
+- create Qdrant connection;
+- manage client lifecycle;
+- isolate external dependency;
+- provide async client via DI.
+
+No singleton state.
 """
 
 from __future__ import annotations
 
-import logging
-import os
 
 from qdrant_client import AsyncQdrantClient
 
 
-logger = logging.getLogger(__name__)
+from web_search.domain.exceptions import (
+    InfrastructureConfigurationError,
+)
 
 
-_client: AsyncQdrantClient | None = None
-
-
-def get_qdrant_client() -> AsyncQdrantClient:
+class QdrantClientFactory:
     """
-    Return singleton Qdrant async client.
+    Factory for creating Qdrant clients.
+
+    Client lifecycle is controlled by application layer.
     """
 
-    global _client
 
-    if _client is None:
-        url = os.getenv("QDRANT_URL")
-        api_key = os.getenv("QDRANT_API_KEY")
+    def create(
+        self,
+        url: str,
+        api_key: str | None = None,
+    ) -> AsyncQdrantClient:
+        """
+        Create async Qdrant client.
+        """
 
         if not url:
-            raise RuntimeError(
-                "QDRANT_URL is missing."
+            raise InfrastructureConfigurationError(
+                "Qdrant URL is required."
             )
 
-        logger.info(
-            "Initializing Qdrant client."
-        )
 
-        _client = AsyncQdrantClient(
+        return AsyncQdrantClient(
             url=url,
             api_key=api_key,
         )
 
-    return _client
 
-
-async def close_qdrant_client() -> None:
+class QdrantConnection:
     """
-    Close Qdrant client.
+    Thin wrapper around Qdrant client.
+
+    Used by repositories.
     """
 
-    global _client
 
-    if _client is not None:
-        await _client.close()
-        _client = None
+    def __init__(
+        self,
+        client: AsyncQdrantClient,
+    ):
+        self._client = client
+
+
+    @property
+    def client(
+        self,
+    ) -> AsyncQdrantClient:
+        """
+        Access underlying client.
+        """
+
+        return self._client
+
+
+    async def close(
+        self,
+    ) -> None:
+        """
+        Close Qdrant connection.
+        """
+
+        await self._client.close()
