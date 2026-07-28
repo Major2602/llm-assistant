@@ -7,6 +7,8 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from datetime import datetime, UTC
+
 from web_search.chunker import chunk_documents
 from web_search.compression import compress_chunks
 from web_search.context_optimizer import optimize_context
@@ -258,7 +260,10 @@ async def get_context(
 
     await init_web_search()
 
-    metadata = PipelineMetadata()
+    metadata = PipelineMetadata(
+        query=query,
+        created_at=int(datetime.now(UTC).timestamp())
+    )
 
     normalized_query = preprocess_query(
         query,
