@@ -17,9 +17,6 @@ from web_search.embedding_retrieval import retrieve_by_embedding_similarity
 from web_search.exa import search_exa
 from web_search.filter import filter_chunks
 from web_search.config import (
-    CACHE_TOP_K,
-    EMBEDDING_TOP_K,
-    RERANK_TOP_K,
     CLEANUP_DAYS
 )
 from web_search.models import (
@@ -135,7 +132,6 @@ async def _retrieve_from_memory(
 
     cached = await hybrid_search(
         query=query,
-        limit=CACHE_TOP_K,
     )
 
     decision = RetrievalDecision(
@@ -161,7 +157,6 @@ async def _retrieve_from_memory(
     ranked = await reranker.rerank(
         query=query.normalized,
         chunks=semantic_chunks,
-        top_k=RERANK_TOP_K,
     )
 
     return decision, ranked
@@ -209,7 +204,6 @@ async def _retrieve_from_web(
     embedded = await retrieve_by_embedding_similarity(
         query=query.normalized,
         chunks=filtered,
-        top_k=EMBEDDING_TOP_K,
     )
 
     metadata.chunks_embedded = len(embedded)
@@ -222,7 +216,6 @@ async def _retrieve_from_web(
     ranked = await reranker.rerank(
         query=query.normalized,
         chunks=embedded,
-        top_k=RERANK_TOP_K,
     )
 
     return ranked, all_chunks
