@@ -10,28 +10,44 @@ import os
 
 LOGGER_NAME = "web_search"
 
+DEFAULT_LOG_LEVEL = logging.INFO
 
-def configure_logging() -> logging.Logger:
+
+def _resolve_log_level(
+    value: str | None,
+) -> int:
     """
-    Configure web_search logger.
-
-    Application can attach own handlers later.
+    Resolve logging level safely.
     """
 
-    logger = logging.getLogger(
-        LOGGER_NAME
+    if not value:
+        return DEFAULT_LOG_LEVEL
+
+    level = value.upper()
+
+    return logging.getLevelNamesMapping().get(
+        level,
+        DEFAULT_LOG_LEVEL,
     )
 
-    level = os.getenv(
-        "WEB_SEARCH_LOG_LEVEL",
-        "INFO",
-    )
+
+def get_logger(
+    name: str = LOGGER_NAME,
+) -> logging.Logger:
+    """
+    Get configured pipeline logger.
+
+    Does not create handlers.
+    Application owns logging infrastructure.
+    """
+
+    logger = logging.getLogger(name)
 
     logger.setLevel(
-        getattr(
-            logging,
-            level.upper(),
-            logging.INFO,
+        _resolve_log_level(
+            os.getenv(
+                "WEB_SEARCH_LOG_LEVEL"
+            )
         )
     )
 
