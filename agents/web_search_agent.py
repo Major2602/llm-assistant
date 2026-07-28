@@ -1,102 +1,100 @@
 """
 Web search agent.
 
-Responsibilities
-----------------
-- configure LangChain agent;
-- expose web_search tool;
-- bridge retrieval pipeline to LLM;
-- expose structured response for UI.
+Responsibilities:
 
-The agent intentionally knows nothing about
-retrieval internals.
+- configure LangChain agent;
+- expose retrieval tool;
+- bridge AgentContext to LLM;
+- convert final execution result into FinalAnswer contract.
+
+The agent does not know about:
+
+- Exa
+- Qdrant
+- embeddings
+- reranking
+- compression
+- retrieval internals
 """
 
 from __future__ import annotations
 
+
 import logging
 import threading
-
 from typing import Any
+
 
 from langchain.agents import create_agent
 from langchain.tools import tool
 
+
 from llm import get_llm
+
+
 from web_search.orchestrator import get_context
-from web_search.models import PipelineMetadata, Source
+
+
+from web_search.models import (
+    AgentContext,
+    FinalAnswer,
+)
+
 
 logger = logging.getLogger(__name__)
 
 
-# ==========================================================
-# UI Contract
-# ==========================================================
-
-
-class AgentResponse(dict):
-    """
-    Final response returned to UI.
-
-    {
-        "answer": "...",
-        "sources": [...],
-        "metadata": {...}
-    }
-    """
-
-    pass
-
 
 # ==========================================================
-# Tool
+# Retrieval Tool
 # ==========================================================
 
 
-@tool(response_format="content_and_artifact")
+@tool(
+    response_format="content_and_artifact"
+)
 async def web_search(
     query: str,
 ) -> tuple[str, dict[str, Any]]:
     """
-    Retrieve optimized context.
+    Retrieve external context.
+
+    Returns:
 
     content:
-        text injected into LLM context
+        Text context for LLM.
 
     artifact:
-        metadata preserved for UI
+        Structured context for UI layer.
     """
 
     logger.info(
-        "Web search requested. query='%s'",
+        "Retrieval requested query=%s",
         query,
     )
 
-    context = await get_context(query)
 
-    tokens = (
-        context.optimized_context.total_tokens
-        if context.optimized_context
-        else 0
+    context = await get_context(
+        query
     )
 
-    logger.info(
-        "Context ready. sources=%d tokens=%d",
-        len(context.sources),
-        tokens,
-    )
 
     artifact = {
-        "sources": [
-            source.model_dump()
-            for source in context.sources
-        ],
-        "metadata": (
-            context.metadata.model_dump()
-            if context.metadata
-            else None
-        ),
+        "context": context.model_dump()
     }
+
+
+    logger.info(
+        (
+            "Retrieval completed "
+            "sources=%d"
+        ),
+        len(
+            context.sources
+        ),
+    )
+
 
     return (
         context.text,
@@ -104,60 +102,240 @@ async def web_search(
     )
 
 
+
 # ==========================================================
-# Agent
+# Agent configuration
 # ==========================================================
 
 
 SYSTEM_PROMPT = """
 You are an advanced AI assistant.
 
-You have access to an external retrieval tool.
+You have access to an external knowledge retrieval tool.
 
-Instructions:
+Rules:
 
-- Prefer retrieved information whenever available.
+- Use retrieved context whenever it is available.
+- Prefer retrieved information over memory.
 - Never invent unsupported facts.
-- If retrieved information is insufficient, say so.
+- If information is insufficient, clearly state uncertainty.
 - Never fabricate citations.
-- Never mention internal implementation details.
-- Always answer in the user's language.
-- Produce concise, accurate, well-structured responses.
+
+Answer in the user's language.
+
+Do not mention internal retrieval mechanisms.
+
+Be concise and structured.
 """
+
 
 
 _agent: Any | None = None
 
-_lock = threading.Lock()
+_agent_lock = threading.Lock()
+
 
 
 def get_agent() -> Any:
+    """
+    Return singleton LangChain agent.
+    """
 
     global _agent
 
+
     if _agent is not None:
+
         return _agent
 
-    with _lock:
+
+
+    with _agent_lock:
+
 
         if _agent is not None:
+
             return _agent
 
+
+
         logger.info(
-            "Initializing web search agent."
+            "Initializing agent."
         )
+
 
         _agent = create_agent(
+
             model=get_llm(),
-            tools=[web_search],
+
+            tools=[
+                web_search,
+            ],
+
             system_prompt=SYSTEM_PROMPT,
+
         )
+
 
         logger.info(
-            "Web search agent initialized."
+            "Agent initialized."
         )
 
+
         return _agent
+
+
+
+# ==========================================================
+# Final answer builder
+# ==========================================================
+
+
+def _extract_context(
+    messages: list[Any],
+) -> AgentContext | None:
+    """
+    Extract AgentContext from ToolMessage artifact.
+    """
+
+    for message in reversed(messages):
+
+        artifact = getattr(
+            message,
+            "artifact",
+            None,
+        )
+
+
+        if not artifact:
+
+            continue
+
+
+        raw_context = artifact.get(
+            "context"
+        )
+
+
+        if not raw_context:
+
+            continue
+
+
+        return AgentContext(
+            **raw_context
+        )
+
+
+    return None
+
+
+
+def _extract_answer(
+    messages: list[Any],
+) -> str:
+    """
+    Extract final AI response.
+    """
+
+    for message in reversed(messages):
+
+        content = getattr(
+            message,
+            "content",
+            None,
+        )
+
+
+        if not content:
+
+            continue
+
+
+        message_type = getattr(
+            message,
+            "type",
+            None,
+        )
+
+
+        if message_type == "ai":
+
+            if isinstance(
+                content,
+                str,
+            ):
+                return content
+
+
+            return str(content)
+
+
+    raise RuntimeError(
+        "Agent returned no final answer."
+    )
+
+
+
+def _build_final_answer(
+    result: dict[str, Any],
+) -> FinalAnswer:
+    """
+    Convert LangChain result into UI contract.
+    """
+
+    messages = result.get(
+        "messages",
+        [],
+    )
+
+
+    if not messages:
+
+        raise RuntimeError(
+            "Agent returned no messages."
+        )
+
+
+    answer = _extract_answer(
+        messages
+    )
+
+
+    context = _extract_context(
+        messages
+    )
+
+
+    if context is None:
+
+        return FinalAnswer(
+            answer=answer
+        )
+
+
+    citation_map = {}
+
+
+    if context.optimized_context:
+
+        citation_map = (
+            context.optimized_context.citation_map
+        )
+
+
+    return FinalAnswer(
+
+        answer=answer,
+
+        sources=context.sources,
+
+        citation_map=citation_map,
+
+        metadata=context.metadata,
+
+    )
+
 
 
 # ==========================================================
@@ -167,91 +345,61 @@ def get_agent() -> Any:
 
 async def ask_agent(
     text: str,
-) -> AgentResponse:
+) -> FinalAnswer:
     """
-    Execute agent.
-
-    Returns
-
-    {
-        answer,
-        sources,
-        metadata,
-    }
+    Execute agent and return UI contract.
     """
 
     logger.info(
         "Agent request received."
     )
 
-    result = await get_agent().ainvoke(
+
+    agent = get_agent()
+
+
+    result = await agent.ainvoke(
+
         {
             "messages": [
+
                 {
                     "role": "user",
+
                     "content": text,
+
                 }
+
             ]
         }
+
     )
 
-    if not isinstance(result, dict):
+
+    if not isinstance(
+        result,
+        dict,
+    ):
+
         raise RuntimeError(
             "Unexpected agent response."
         )
 
-    messages = result.get(
-        "messages",
-        [],
+
+    final_answer = _build_final_answer(
+        result
     )
 
-    if not messages:
-        raise RuntimeError(
-            "Agent returned no messages."
-        )
-
-    answer = ""
-
-    sources: list[dict[str, Any]] = []
-
-    metadata: dict[str, Any] | None = None
-
-    for message in messages:
-
-        content = getattr(
-            message,
-            "content",
-            None,
-        )
-
-        if isinstance(content, str):
-            answer = content
-
-        artifact = getattr(
-            message,
-            "artifact",
-            None,
-        )
-
-        if not artifact:
-            continue
-
-        sources = artifact.get(
-            "sources",
-            sources,
-        )
-
-        metadata = artifact.get(
-            "metadata",
-            metadata,
-        )
 
     logger.info(
-        "Agent response generated."
+        (
+            "Agent response completed "
+            "sources=%d"
+        ),
+        len(
+            final_answer.sources
+        ),
     )
 
-    return AgentResponse(
-        answer=answer,
-        sources=sources,
-        metadata=metadata,
-    )
+
+    return final_answer
