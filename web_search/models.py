@@ -129,7 +129,7 @@ class EmbeddedChunk(FilteredChunk):
 
     similarity_score: float = 0.0
 
-    retrieval_score: float = 0.0
+    rrf_score: float = 0.0
 
 
 
