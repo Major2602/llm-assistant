@@ -141,6 +141,17 @@ def get_client() -> AsyncQdrantClient:
 
 
 
+def collection_exists() -> bool:
+    """
+    Check if Qdrant collection exists.
+    """
+
+    return await get_client().collection_exists(
+        COLLECTION_NAME
+    )
+
+
+
 def get_sparse_encoder() -> SparseTextEmbedding:
     """
     BM25 encoder.
@@ -476,9 +487,11 @@ async def hybrid_search(
     """
 
 
-    if not await get_client().collection_exists(
-        COLLECTION_NAME
-    ):
+    if not await collection_exists():
+
+        logger.info(
+            "Qdrant collection does not exist. Skip hybrid search."
+        )
 
         return []
 
@@ -645,6 +658,18 @@ async def update_access(
 async def cleanup_old_chunks(
     days: int = 30,
 ):
+    """
+    Remove old unused chunks.
+    """
+
+    if not await collection_exists():
+
+        logger.info(
+            "Qdrant collection does not exist. Skip cleanup"
+        )
+
+        return
+    
 
     cutoff = int(
 
