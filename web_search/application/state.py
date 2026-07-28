@@ -1,8 +1,4 @@
-"""
-Pipeline execution state.
-
-Contains shared mutable state passed between pipeline stages.
-"""
+# web_search/application/state.py
 
 from __future__ import annotations
 
@@ -11,31 +7,27 @@ from dataclasses import dataclass, field
 
 
 from web_search.domain.models import (
-    AgentContext,
-    DocumentChunk,
     NormalizedQuery,
-    PipelineMetadata,
-    RankedChunk,
-    CompressedChunk,
     WebDocument,
+    DocumentChunk,
+    EmbeddedChunk,
+    RankedChunk,
+    AgentContext,
+    PipelineMetadata,
 )
+
 
 
 @dataclass
 class PipelineState:
     """
-    Unified state object for pipeline execution.
+    Shared mutable state of web search pipeline.
 
-    Every stage receives and returns this object.
+    Each application stage receives this object
+    and returns updated state.
     """
 
-
     query: NormalizedQuery
-
-
-    metadata: PipelineMetadata = field(
-        default_factory=PipelineMetadata
-    )
 
 
     documents: list[WebDocument] = field(
@@ -48,12 +40,17 @@ class PipelineState:
     )
 
 
-    ranked_chunks: list[RankedChunk] = field(
+    filtered_chunks: list[DocumentChunk] = field(
         default_factory=list
     )
 
 
-    compressed_chunks: list[CompressedChunk] = field(
+    embedded_chunks: list[EmbeddedChunk] = field(
+        default_factory=list
+    )
+
+
+    ranked_chunks: list[RankedChunk] = field(
         default_factory=list
     )
 
@@ -61,22 +58,30 @@ class PipelineState:
     context: AgentContext | None = None
 
 
-    cache_hit: bool = False
-
-
-    completed_stages: list[str] = field(
-        default_factory=list
+    metadata: PipelineMetadata = field(
+        default_factory=PipelineMetadata
     )
 
 
-    def mark_completed(
-        self,
-        stage: str,
-    ) -> None:
+    cache_hit: bool = False
+
+
+
+    def reset_results(self) -> None:
         """
-        Mark pipeline stage as completed.
+        Clear calculated pipeline results.
+
+        Used when pipeline execution must be restarted.
         """
 
-        self.completed_stages.append(
-            stage
-        )
+        self.documents.clear()
+
+        self.chunks.clear()
+
+        self.filtered_chunks.clear()
+
+        self.embedded_chunks.clear()
+
+        self.ranked_chunks.clear()
+
+        self.context = None
