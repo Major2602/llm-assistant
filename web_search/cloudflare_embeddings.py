@@ -569,15 +569,7 @@ class CloudflareEmbeddings:
             )
 
 
-        return [
-            
-            DenseVector(
-                values=vector
-            )
-            
-            for vector in result
-            
-        ]
+        return result
 
 
 
