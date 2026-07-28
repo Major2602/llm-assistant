@@ -1,24 +1,18 @@
 """
-Main web search pipeline orchestration.
+Application pipeline orchestration.
+
+Responsibilities:
+
+- execute web search use-case;
+- coordinate pipeline stages;
+- mutate PipelineState;
+- keep business flow independent from infrastructure.
 """
 
 from __future__ import annotations
 
 
 import logging
-import uuid
-
-
-from datetime import datetime, UTC
-
-
-from web_search.application.state import PipelineState
-from web_search.application.services import (
-    SearchService,
-    MemoryService,
-    Embedder,
-    Reranker,
-)
 
 
 from web_search.domain.models import (
@@ -27,14 +21,57 @@ from web_search.domain.models import (
 )
 
 
-from web_search.processing.chunking import chunk_documents
-from web_search.processing.filtering import filter_chunks
-from web_search.processing.retrieval import retrieve_by_embedding_similarity
-from web_search.processing.compression import compress_chunks
-from web_search.processing.context import optimize_context
+from web_search.application.state import (
+    PipelineState,
+)
 
 
-from web_search.query_normalizer import preprocess_query
+from web_search.application.policies import (
+    RetrievalPolicy,
+)
+
+
+from web_search.domain.contracts import (
+    SearchProvider,
+    VectorStore,
+    Embedder,
+    Reranker,
+)
+
+
+from web_search.processing.chunking import (
+    chunk_documents,
+)
+
+
+from web_search.processing.filtering import (
+    filter_chunks,
+)
+
+
+from web_search.processing.retrieval import (
+    retrieve_by_embedding_similarity,
+)
+
+
+from web_search.processing.reranking import (
+    rerank_chunks,
+)
+
+
+from web_search.processing.compression import (
+    compress_chunks,
+)
+
+
+from web_search.processing.context import (
+    optimize_context,
+)
+
+
+from web_search.query_normalizer import (
+    preprocess_query,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -43,25 +80,43 @@ logger = logging.getLogger(__name__)
 
 class WebSearchPipeline:
     """
-    Application pipeline.
+    Main application pipeline.
 
-    Contains orchestration only.
-    Business logic stays in processing layer.
+    Flow:
+
+        normalize query
+            ↓
+        memory lookup
+            ↓
+        web retrieval
+            ↓
+        chunking
+            ↓
+        filtering
+            ↓
+        embedding retrieval
+            ↓
+        reranking
+            ↓
+        compression
+            ↓
+        context optimization
     """
-
 
 
     def __init__(
         self,
-        search_service: SearchService,
-        memory_service: MemoryService,
+        search_provider: SearchProvider,
+        vector_store: VectorStore,
         embedder: Embedder,
         reranker: Reranker,
+        retrieval_policy: RetrievalPolicy,
     ):
-        self.search_service = search_service
-        self.memory_service = memory_service
+        self.search_provider = search_provider
+        self.vector_store = vector_store
         self.embedder = embedder
         self.reranker = reranker
+        self.policy = retrieval_policy
 
 
 
@@ -70,36 +125,28 @@ class WebSearchPipeline:
         query: str,
     ) -> AgentContext:
         """
-        Execute complete pipeline.
+        Execute complete search pipeline.
         """
 
 
-        normalized = preprocess_query(
+        normalized_query = preprocess_query(
             query
         )
 
 
         state = PipelineState(
 
-            query=normalized,
+            query=normalized_query,
 
-            metadata=PipelineMetadata(
-
-                request_id=str(
-                    uuid.uuid4()
-                ),
-
-                query=normalized.normalized,
-
-                created_at=int(
-                    datetime.now(
-                        UTC
-                    ).timestamp()
-                ),
-
-            ),
+            metadata=PipelineMetadata()
 
         )
+
+
+        logger.info(
+            "Pipeline started."
+        )
+
 
 
         await self._memory_stage(
@@ -107,56 +154,46 @@ class WebSearchPipeline:
         )
 
 
-        if not state.cache_hit:
+        if not self.policy.use_memory_result(
+            state
+        ):
 
-            await self._retrieval_stage(
+            await self._web_stage(
                 state
             )
 
 
-        if not state.ranked_chunks:
+
+        if not state.ranked:
+
+            logger.info(
+                "No relevant chunks."
+            )
 
             return AgentContext(
                 metadata=state.metadata
             )
 
 
-        state.compressed_chunks = await compress_chunks(
+
+        state.compressed = await compress_chunks(
             query=state.query.normalized,
-            chunks=state.ranked_chunks,
+            chunks=state.ranked,
         )
-
-
-        state.mark_completed(
-            "compression"
-        )
-
-
-        if not state.compressed_chunks:
-
-            return AgentContext(
-                metadata=state.metadata
-            )
 
 
         state.context = optimize_context(
             query=state.query.normalized,
-            chunks=state.compressed_chunks,
+            chunks=state.compressed,
         )
 
 
-        state.mark_completed(
-            "context"
+        logger.info(
+            "Pipeline completed."
         )
 
 
-        return AgentContext(
-
-            **state.context.model_dump(),
-
-            metadata=state.metadata,
-
-        )
+        return state.context
 
 
 
@@ -165,71 +202,65 @@ class WebSearchPipeline:
         state: PipelineState,
     ) -> None:
         """
-        Memory lookup stage.
+        Retrieve from vector memory.
         """
 
 
-        cached = await self.memory_service.lookup(
+        results = await self.vector_store.search(
             state.query
         )
 
 
-        if not cached:
+        if not results:
+
+            state.metadata.cache_hit = False
 
             return
 
 
-        state.cache_hit = True
 
-        state.mark_completed(
-            "memory_lookup"
+        state.metadata.cache_hit = True
+
+
+        state.ranked = await rerank_chunks(
+            query=state.query.normalized,
+            chunks=results,
+            reranker=self.reranker,
         )
 
 
-        state.ranked_chunks = [
-            item.chunk
-            for item in cached
-        ]
 
-
-
-    async def _retrieval_stage(
+    async def _web_stage(
         self,
         state: PipelineState,
     ) -> None:
         """
-        Fresh web retrieval pipeline.
+        Execute fresh web retrieval.
         """
 
 
-        state.documents = await self.search_service.execute(
-            state.query
+        documents = await self.search_provider.search(
+            state.query.normalized
         )
 
 
-        state.mark_completed(
-            "exa_retrieval"
-        )
+        state.documents = documents
+
+
+        if not documents:
+
+            return
+
 
 
         state.chunks = chunk_documents(
-            state.documents
-        )
-
-
-        state.mark_completed(
-            "chunking"
+            documents
         )
 
 
         filtered = filter_chunks(
             chunks=state.chunks,
             query=state.query.normalized,
-        )
-
-
-        state.mark_completed(
-            "filtering"
         )
 
 
@@ -240,24 +271,13 @@ class WebSearchPipeline:
         )
 
 
-        state.mark_completed(
-            "embedding_retrieval"
-        )
-
-
-        state.ranked_chunks = await self.reranker.rerank(
+        state.ranked = await rerank_chunks(
             query=state.query.normalized,
             chunks=embedded,
+            reranker=self.reranker,
         )
 
 
-        state.mark_completed(
-            "reranking"
+        await self.vector_store.store(
+            state.chunks
         )
-
-
-        if state.chunks:
-
-            await self.memory_service.save(
-                state.chunks
-            )
