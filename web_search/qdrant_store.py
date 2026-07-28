@@ -132,12 +132,12 @@ def get_client() -> AsyncQdrantClient:
 
 
 
-def collection_exists() -> bool:
+async def collection_exists() -> bool:
     """
     Check if Qdrant collection exists.
     """
 
-    return await get_client().collection_exists(
+    return get_client().collection_exists(
         COLLECTION_NAME
     )
 
