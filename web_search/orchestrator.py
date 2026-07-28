@@ -144,7 +144,7 @@ async def _retrieve_from_memory(
         limit=CACHE_TOP_K,
     )
 
-    desision = RetrievalDecision(
+    decision = RetrievalDecision(
         cache_hit=bool(cached),
         results=cached
     )
@@ -199,6 +199,8 @@ async def _retrieve_from_web(
     if not all_chunks:
         return [], []
 
+    metadata.chunks_created = len(all_chunks)
+
     filtered = filter_chunks(
         chunks=all_chunks,
         query=query.normalized,
@@ -206,6 +208,8 @@ async def _retrieve_from_web(
 
     if not filtered:
         return [], all_chunks
+
+    metadata.chunks_filtered = len(filtered)
 
     embedded = await retrieve_by_embedding_similarity(
         query=query.normalized,
@@ -215,6 +219,8 @@ async def _retrieve_from_web(
 
     if not embedded:
         return [], all_chunks
+
+    metadata.chunks_embedded = len(embedded)
 
     reranker = get_reranker()
 
@@ -261,14 +267,14 @@ async def get_context(
 
     await init_web_search()
 
-    metadata = PipelineMetadata(
-        request_id=str(uuid.uuid4()),
-        query=query,
-        created_at=int(datetime.now(UTC).timestamp())
-    )
-
     normalized_query = preprocess_query(
         query,
+    )
+
+    metadata = PipelineMetadata(
+        request_id=str(uuid.uuid4()),
+        query=normalized_query.normalized,
+        created_at=int(datetime.now(UTC).timestamp())
     )
 
     logger.info(
@@ -278,8 +284,6 @@ async def get_context(
     decision, ranked = await _retrieve_from_memory(
         normalized_query,
     )
-
-    metadata.cache_hit = decision.cache_hit
 
     if not decision.cache_hit:
 
@@ -291,9 +295,6 @@ async def get_context(
             normalized_query,
         )
 
-        metadata.chunks_created = len(chunks)
-        metadata.chunks_ranked = len(ranked)
-
         await _store_memory(
             chunks,
         )
@@ -304,17 +305,24 @@ async def get_context(
             "No relevant documents found."
         )
 
-        return AgentContext()
+        return AgentContext(
+            metadata=metadata
+        )
+
+    metadata.cache_hit = decision.cache_hit
+    metadata.chunks_ranked = len(ranked)
 
     compressed = await compress_chunks(
         query=normalized_query.normalized,
         chunks=ranked,
     )
 
-    metadata.chunks_compressed = len(compressed)
-
     if not compressed:
-        return AgentContext()
+        return AgentContext(
+            metadata=metadata
+        )
+
+    metadata.chunks_compressed = len(compressed)
 
     context = optimize_context(
         query=normalized_query.normalized,
