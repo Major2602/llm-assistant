@@ -1,17 +1,6 @@
-"""
-Document chunking processing stage.
-
-Responsibilities:
-
-- split documents into chunks;
-- preserve source metadata;
-- create DocumentChunk objects.
-"""
+# web_search/processing/chunking.py
 
 from __future__ import annotations
-
-
-import logging
 
 
 from web_search.domain.models import (
@@ -20,40 +9,38 @@ from web_search.domain.models import (
 )
 
 
-logger = logging.getLogger(__name__)
 
+DEFAULT_CHUNK_SIZE = 800
 
+DEFAULT_OVERLAP = 120
 
-# ==========================================================
-# Configuration
-# ==========================================================
-
-
-DEFAULT_CHUNK_SIZE = 1000
-
-DEFAULT_OVERLAP = 200
-
-
-
-# ==========================================================
-# Chunking
-# ==========================================================
 
 
 def _split_text(
     text: str,
-    chunk_size: int,
-    overlap: int,
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+    overlap: int = DEFAULT_OVERLAP,
 ) -> list[str]:
     """
     Split text into overlapping chunks.
+
+    Keeps previous chunking behavior:
+    - fixed size;
+    - overlap between segments.
     """
 
-
     if not text:
-
         return []
 
+
+    words = text.split()
+
+
+    if len(words) <= chunk_size:
+
+        return [
+            text.strip()
+        ]
 
 
     chunks: list[str] = []
@@ -62,18 +49,14 @@ def _split_text(
     start = 0
 
 
-    length = len(text)
-
-
-
-    while start < length:
-
+    while start < len(words):
 
         end = start + chunk_size
 
 
-        chunk = text[start:end].strip()
-
+        chunk = " ".join(
+            words[start:end]
+        ).strip()
 
 
         if chunk:
@@ -83,9 +66,7 @@ def _split_text(
             )
 
 
-
         start = end - overlap
-
 
 
         if start < 0:
@@ -93,84 +74,51 @@ def _split_text(
             start = 0
 
 
+        if end >= len(words):
+
+            break
+
 
     return chunks
 
 
 
-# ==========================================================
-# Public API
-# ==========================================================
-
-
 def chunk_documents(
     documents: list[WebDocument],
-    chunk_size: int = DEFAULT_CHUNK_SIZE,
-    overlap: int = DEFAULT_OVERLAP,
 ) -> list[DocumentChunk]:
     """
-    Convert documents into chunks.
+    Convert web documents into searchable chunks.
     """
-
-
-    if not documents:
-
-        return []
-
-
 
     result: list[DocumentChunk] = []
 
 
-
     for document in documents:
 
-
         chunks = _split_text(
-
-            document.text,
-
-            chunk_size,
-
-            overlap,
-
+            document.text
         )
 
 
-
-        for index, text in enumerate(chunks):
-
+        for index, text in enumerate(
+            chunks
+        ):
 
             result.append(
 
                 DocumentChunk(
 
-                    id=f"{document.id}_{index}",
-
-                    text=text,
+                    document_id=document.id,
 
                     source=document.source,
 
-                    document_id=document.id,
+                    text=text,
 
                     chunk_index=index,
 
                 )
 
             )
-
-
-
-    logger.info(
-
-        "Documents chunked documents=%d chunks=%d",
-
-        len(documents),
-
-        len(result),
-
-    )
-
 
 
     return result
