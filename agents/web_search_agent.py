@@ -1,21 +1,12 @@
 """
 Web search agent.
 
-Responsibilities:
+Module Responsibilities:
 
 - configure LangChain agent;
 - expose retrieval tool;
 - bridge AgentContext to LLM;
 - convert final execution result into FinalAnswer contract.
-
-The agent does not know about:
-
-- Exa
-- Qdrant
-- embeddings
-- reranking
-- compression
-- retrieval internals
 """
 
 from __future__ import annotations
