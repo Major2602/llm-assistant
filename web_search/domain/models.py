@@ -1,41 +1,49 @@
-"""
-Web search domain models.
-
-Pure business contracts.
-No infrastructure dependencies.
-"""
+# web_search/domain/models.py
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+
+from dataclasses import dataclass, field
+from datetime import datetime, UTC
+from typing import Any
 
 
 # ==========================================================
-# Metadata
+# Helpers
 # ==========================================================
 
 
-class PipelineMetadata(BaseModel):
-    """Runtime pipeline metadata."""
-
-    request_id: str | None = None
-    created_at: int | None = None
-    query: str | None = None
-
-    cache_hit: bool = False
-
-    documents_found: int = 0
-    chunks_created: int = 0
-    chunks_filtered: int = 0
-    chunks_embedded: int = 0
-    chunks_ranked: int = 0
-    chunks_compressed: int = 0
-
-    sources_count: int = 0
-
-    pipeline_errors: list[str] = Field(
-        default_factory=list
+def utc_timestamp() -> int:
+    return int(
+        datetime.now(
+            UTC
+        ).timestamp()
     )
+
+
+# ==========================================================
+# Source
+# ==========================================================
+
+
+@dataclass(slots=True)
+class Source:
+    """
+    Citation source metadata.
+    """
+
+    title: str = "Untitled"
+
+    url: str = ""
+
+    provider: str | None = None
+
+    domain: str | None = None
+
+    author: str | None = None
+
+    published_date: str | None = None
+
 
 
 # ==========================================================
@@ -43,35 +51,20 @@ class PipelineMetadata(BaseModel):
 # ==========================================================
 
 
-class NormalizedQuery(BaseModel):
-    """Normalized user query."""
+@dataclass(slots=True)
+class NormalizedQuery:
+    """
+    Normalized user query.
+    """
 
     original: str
 
     normalized: str
 
-    created_at: int | None = None
+    created_at: int = field(
+        default_factory=utc_timestamp
+    )
 
-
-# ==========================================================
-# Sources
-# ==========================================================
-
-
-class Source(BaseModel):
-    """External source metadata."""
-
-    title: str = "Untitled"
-
-    url: str = ""
-
-    provider: str = "unknown"
-
-    author: str | None = None
-
-    published_date: str | None = None
-
-    domain: str | None = None
 
 
 # ==========================================================
@@ -79,49 +72,64 @@ class Source(BaseModel):
 # ==========================================================
 
 
-class WebDocument(BaseModel):
-    """Normalized external document."""
+@dataclass(slots=True)
+class WebDocument:
+    """
+    Raw external document.
+    """
 
     id: str
 
     text: str
 
-    source: Source = Field(
-        default_factory=Source
+    source: Source
+
+    created_at: int = field(
+        default_factory=utc_timestamp
     )
 
-    created_at: int | None = None
-
-    last_access: int | None = None
-
-
-# ==========================================================
-# Chunk pipeline
-# ==========================================================
+    last_access: int = field(
+        default_factory=utc_timestamp
+    )
 
 
-class DocumentChunk(BaseModel):
-    """Base retrieval chunk."""
+
+@dataclass(slots=True)
+class DocumentChunk:
+    """
+    Chunk produced from document.
+    """
 
     id: str
 
-    document_id: str
-
     text: str
 
-    source: Source = Field(
-        default_factory=Source
-    )
+    source: Source
+
+    document_id: str | None = None
 
     chunk_index: int = 0
 
-    created_at: int | None = None
+    created_at: int = field(
+        default_factory=utc_timestamp
+    )
 
-    last_access: int | None = None
+    last_access: int = field(
+        default_factory=utc_timestamp
+    )
 
 
+
+# ==========================================================
+# Retrieval models
+# ==========================================================
+
+
+@dataclass(slots=True)
 class FilteredChunk(DocumentChunk):
-    """Chunk after quality filtering."""
+    """
+    Chunk after quality filtering.
+    """
 
     keyword_score: float = 0.0
 
@@ -132,60 +140,61 @@ class FilteredChunk(DocumentChunk):
     filter_score: float = 0.0
 
 
+
+@dataclass(slots=True)
+class DenseVector:
+    """
+    Dense embedding vector.
+    """
+
+    values: list[float]
+
+
+
+@dataclass(slots=True)
 class EmbeddedChunk(FilteredChunk):
-    """Chunk after embedding retrieval."""
+    """
+    Chunk with embedding similarity score.
+    """
 
     similarity_score: float = 0.0
 
-    rrf_score: float = 0.0
+    rrf_score: float | None = None
 
 
+
+@dataclass(slots=True)
 class RankedChunk(EmbeddedChunk):
-    """Chunk after reranking."""
+    """
+    Chunk after reranking.
+    """
 
     rerank_score: float = 0.0
 
 
+
+@dataclass(slots=True)
 class CompressedChunk(RankedChunk):
-    """Chunk after compression."""
+    """
+    Chunk after compression.
+    """
 
     compressed_text: str = ""
 
     compression_ratio: float = 1.0
 
 
-# ==========================================================
-# Retrieval
-# ==========================================================
-
-
-class HybridRetrievalResult(BaseModel):
-    """Memory retrieval result."""
-
-    chunk: DocumentChunk
-
-    rrf_score: float = 0.0
-
-    retrieved_from: str = "qdrant"
-
-
-class RetrievalDecision(BaseModel):
-    """Memory lookup decision."""
-
-    cache_hit: bool = False
-
-    results: list[HybridRetrievalResult] = Field(
-        default_factory=list
-    )
-
 
 # ==========================================================
-# Context
+# Context models
 # ==========================================================
 
 
-class ContextDocument(BaseModel):
-    """Document passed to LLM."""
+@dataclass(slots=True)
+class ContextDocument:
+    """
+    Final document representation for LLM.
+    """
 
     chunk_id: str
 
@@ -196,28 +205,36 @@ class ContextDocument(BaseModel):
     relevance_score: float = 0.0
 
 
-class OptimizedContext(BaseModel):
-    """Prepared LLM context."""
+
+@dataclass(slots=True)
+class OptimizedContext:
+    """
+    Optimized LLM context metadata.
+    """
 
     query: str
 
-    documents: list[ContextDocument] = Field(
+    documents: list[ContextDocument] = field(
         default_factory=list
     )
 
     total_tokens: int = 0
 
-    citation_map: dict[str, Source] = Field(
+    citation_map: dict[str, Source] = field(
         default_factory=dict
     )
 
 
-class AgentContext(BaseModel):
-    """Final agent input."""
+
+@dataclass(slots=True)
+class AgentContext:
+    """
+    Final pipeline output.
+    """
 
     text: str = ""
 
-    sources: list[Source] = Field(
+    sources: list[Source] = field(
         default_factory=list
     )
 
@@ -226,20 +243,114 @@ class AgentContext(BaseModel):
     metadata: PipelineMetadata | None = None
 
 
+
 # ==========================================================
-# Final response
+# Pipeline metadata
 # ==========================================================
 
 
-class FinalAnswer(BaseModel):
-    """Agent final answer."""
+@dataclass(slots=True)
+class PipelineMetadata:
+    """
+    Pipeline execution metrics.
+    """
 
-    answer: str
+    request_id: str | None = None
 
-    sources: list[Source] = Field(
+    query: str = ""
+
+    created_at: int = field(
+        default_factory=utc_timestamp
+    )
+
+    cache_hit: bool = False
+
+    chunks_created: int = 0
+
+    chunks_filtered: int = 0
+
+    chunks_embedded: int = 0
+
+    chunks_ranked: int = 0
+
+    chunks_compressed: int = 0
+
+    sources_count: int = 0
+
+
+
+# ==========================================================
+# Retrieval decision
+# ==========================================================
+
+
+@dataclass(slots=True)
+class RetrievalDecision:
+    """
+    Cache retrieval result.
+    """
+
+    cache_hit: bool
+
+    results: list[Any] = field(
         default_factory=list
     )
 
-    citation_map: dict[str, Source] = Field(
-        default_factory=dict
+
+
+@dataclass(slots=True)
+class HybridRetrievalResult:
+    """
+    Qdrant hybrid search result.
+    """
+
+    chunk: DocumentChunk
+
+    rrf_score: float
+
+    retrieved_from: str = "qdrant"
+
+
+
+# ==========================================================
+# Pipeline state
+# ==========================================================
+
+
+@dataclass(slots=True)
+class PipelineState:
+    """
+    Shared mutable state between pipeline stages.
+    """
+
+    query: NormalizedQuery
+
+    documents: list[WebDocument] = field(
+        default_factory=list
+    )
+
+    chunks: list[DocumentChunk] = field(
+        default_factory=list
+    )
+
+    filtered_chunks: list[FilteredChunk] = field(
+        default_factory=list
+    )
+
+    embedded_chunks: list[EmbeddedChunk] = field(
+        default_factory=list
+    )
+
+    ranked_chunks: list[RankedChunk] = field(
+        default_factory=list
+    )
+
+    compressed_chunks: list[CompressedChunk] = field(
+        default_factory=list
+    )
+
+    context: AgentContext | None = None
+
+    metadata: PipelineMetadata = field(
+        default_factory=PipelineMetadata
     )
