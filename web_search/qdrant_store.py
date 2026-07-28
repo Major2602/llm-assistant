@@ -286,7 +286,7 @@ async def _ensure_payload_indexes():
 
 async def _dense_embeddings(
     texts: list[str],
-): -> list[DenseVector]:
+) -> list[DenseVector]:
 
     model = get_embedding_model()
 
@@ -485,12 +485,11 @@ async def hybrid_search(
 
     dense_query = (
         
-        await get_embedding_model()
-        .embed_query(
+        await get_embedding_model().embed_query(
             query.normalized
-        ).values
+        )
         
-    )
+    ).values
 
 
     sparse_query = _sparse_embedding(
