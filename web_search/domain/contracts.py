@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 
-from typing import Protocol, Sequence
+from typing import Protocol
 
 
 from web_search.domain.models import (
@@ -49,7 +49,7 @@ class Embedder(Protocol):
 
     async def embed_documents(
         self,
-        texts: Sequence[str],
+        texts: list[str],
     ) -> list[DenseVector]:
         ...
 
@@ -74,7 +74,7 @@ class Reranker(Protocol):
 
     async def rerank(
         self,
-        query: NormalizedQuery,
+        query: str,
         chunks: list[EmbeddedChunk],
     ) -> list[RankedChunk]:
         ...
@@ -134,6 +134,23 @@ class HttpClient(Protocol):
 
 
 # ==========================================================
+# Lifecycle
+# ==========================================================
+
+
+class AsyncClosable(Protocol):
+    """
+    Async resource lifecycle contract.
+    """
+
+    async def close(
+        self,
+    ) -> None:
+        ...
+
+
+
+# ==========================================================
 # Pipeline stages
 # ==========================================================
 
@@ -141,6 +158,11 @@ class HttpClient(Protocol):
 class PipelineStage(Protocol):
     """
     Common pipeline stage contract.
+
+    Runtime implementation keeps
+    concrete PipelineState dependency
+    outside domain layer to avoid
+    circular imports.
     """
 
     async def execute(
@@ -152,13 +174,13 @@ class PipelineStage(Protocol):
 
 
 # ==========================================================
-# Source factory
+# Source resolver
 # ==========================================================
 
 
 class SourceResolver(Protocol):
     """
-    Source metadata resolver.
+    Source metadata resolver contract.
     """
 
     def resolve(
